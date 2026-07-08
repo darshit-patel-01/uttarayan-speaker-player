@@ -1,0 +1,1402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uttarayan Song Queue</title>
+<style>
+  :root {
+    --kite-orange: #ff6d00;
+    --kite-pink: #ec407a;
+    --kite-yellow: #ffca28;
+    --kite-green: #26a69a;
+    --kite-purple: #7e57c2;
+    --sky-top: #4fb0e8;
+    --sky-bottom: #dff3fb;
+  }
+  * {
+    box-sizing: border-box;
+    cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><polygon points="6,2 24,12 14,26 2,14" fill="%23ff6d00" stroke="white" stroke-width="1.5"/><line x1="6" y1="2" x2="14" y2="26" stroke="white" stroke-width="1"/><line x1="2" y1="14" x2="24" y2="12" stroke="white" stroke-width="1"/></svg>') 6 2, auto;
+  }
+  html {
+    background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-bottom) 55%, #fdf6e3 100%);
+    min-height: 100%;
+  }
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 640px;
+    margin: 60px auto;
+    padding: 0 16px 60px;
+    color: #222;
+    position: relative;
+  }
+  h1 { font-size: 1.3rem; margin-bottom: 24px; }
+  form { display: flex; gap: 8px; }
+  input[type="text"], input[type="password"] {
+    flex: 1;
+    padding: 10px 12px;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+  }
+  button {
+    padding: 10px 18px;
+    font-size: 1rem;
+    border: none;
+    border-radius: 6px;
+    background: linear-gradient(135deg, var(--kite-orange), var(--kite-pink));
+    color: white;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  }
+  button:disabled { background: #999; box-shadow: none; cursor: default; }
+  button.small { padding: 4px 10px; font-size: 0.8rem; }
+  button.secondary { background: var(--kite-purple); }
+  #result, #login-result, #skip-result {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+    display: none;
+  }
+  #skip-btn { background: var(--kite-purple); margin-left: 8px; }
+  #wait-time-banner {
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    background: #eef4ff;
+    color: #1a3d7c;
+  }
+  .ok { display: block !important; background: #e8f5e9; color: #1b5e20; }
+  .err { display: block !important; background: #ffebee; color: #b71c1c; }
+  .site-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .site-header .kite-emoji { font-size: 1.8rem; }
+  .site-header h1 {
+    margin: 0;
+    font-size: 1.5rem;
+    background: linear-gradient(90deg, var(--kite-orange), var(--kite-pink), var(--kite-purple));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .site-header .tagline { font-size: 0.8rem; color: #555; }
+  #now-playing-banner {
+    margin-bottom: 20px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.7);
+    border: 1px solid #cde8f5;
+    font-size: 0.9rem;
+  }
+  .np-row { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+  .np-row + .np-row { margin-top: 6px; }
+  .np-label { font-weight: 600; color: var(--kite-purple); white-space: nowrap; }
+  .np-source { color: #888; font-size: 0.8em; }
+  .np-playing-indicator {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 14px;
+    vertical-align: middle;
+  }
+  .np-playing-indicator span {
+    display: block;
+    width: 3px;
+    background: linear-gradient(180deg, var(--kite-orange), var(--kite-pink));
+    border-radius: 2px;
+    animation: np-bounce 0.9s ease-in-out infinite;
+  }
+  .np-playing-indicator span:nth-child(1) { height: 40%; animation-delay: 0s; }
+  .np-playing-indicator span:nth-child(2) { height: 100%; animation-delay: 0.15s; }
+  .np-playing-indicator span:nth-child(3) { height: 65%; animation-delay: 0.3s; }
+  .np-playing-indicator span:nth-child(4) { height: 85%; animation-delay: 0.45s; }
+  @keyframes np-bounce {
+    0%, 100% { transform: scaleY(0.35); }
+    50% { transform: scaleY(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .np-playing-indicator span { animation: none; transform: scaleY(0.7); }
+  }
+  .profile-widget {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 50;
+  }
+  .profile-icon {
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--kite-orange), var(--kite-pink));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: white;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.25);
+    border: 2px solid white;
+  }
+  .profile-widget.logged-in .profile-icon {
+    background: linear-gradient(135deg, var(--kite-green), var(--kite-purple));
+    box-shadow: 0 0 0 2px var(--kite-green), 0 3px 10px rgba(0,0,0,0.25);
+  }
+  .profile-popover {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    width: 240px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.25);
+    padding: 16px;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-6px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+  }
+  .profile-widget:hover .profile-popover,
+  .profile-widget:focus-within .profile-popover,
+  .profile-widget.open .profile-popover {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(6px);
+  }
+  .profile-popover-title { font-weight: 600; margin-bottom: 8px; color: #333; }
+  #login-form { display: flex; flex-direction: column; gap: 8px; }
+  #login-form input { width: auto; }
+  #logged-in-bar { display: none; flex-direction: column; align-items: flex-start; gap: 10px; }
+  #queue-section h1 { display: inline-block; margin-right: 12px; }
+  #queue-wrap { overflow-x: auto; margin-top: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; white-space: nowrap; }
+  td.title-cell { white-space: normal; max-width: 220px; }
+  th { color: #666; font-weight: 600; }
+  a { color: var(--kite-pink); }
+  #queue-empty { color: #888; font-size: 0.9rem; display: none; }
+  dialog {
+    border: none;
+    border-radius: 8px;
+    padding: 20px;
+    width: 360px;
+    max-width: 90vw;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  }
+  dialog::backdrop { background: rgba(0,0,0,0.4); }
+  dialog h1 { margin: 0 0 12px; }
+  dialog form { flex-direction: column; }
+  #manage-playlist-modal { width: 560px; }
+  #manage-playlist-add-form { flex-direction: row; }
+
+  .tab-nav {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 24px;
+    border-bottom: 2px dashed #b3d9ec;
+  }
+  .tab-btn {
+    background: none;
+    color: #555;
+    border: none;
+    border-radius: 0;
+    border-bottom: 3px solid transparent;
+    padding: 10px 14px;
+    font-size: 0.95rem;
+    margin-bottom: -2px;
+    box-shadow: none;
+  }
+  .tab-btn:hover { color: #222; }
+  .tab-btn.admin-only { display: none; }
+  .tab-btn.active {
+    color: var(--kite-pink);
+    border-bottom-color: var(--kite-orange);
+    font-weight: 600;
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  #about-section {
+    margin-top: 40px;
+    padding-top: 24px;
+    border-top: 2px dashed var(--kite-orange);
+  }
+  #about-section h1 { font-size: 1.15rem; margin-bottom: 16px; }
+  #about-section h2 {
+    font-size: 1rem;
+    margin: 0 0 8px;
+    color: var(--kite-purple);
+  }
+  #about-section p {
+    margin: 0 0 10px;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: #333;
+  }
+  #about-section code {
+    background: #eef4ff;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.85em;
+  }
+  .about-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .about-avatar {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    flex: none;
+    background: linear-gradient(135deg, var(--kite-orange), var(--kite-pink));
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1.1rem;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+  }
+  .about-name { font-weight: 700; font-size: 1.05rem; }
+  .about-title { color: #666; font-size: 0.85rem; margin: 2px 0 6px; }
+  .about-links { display: flex; gap: 12px; font-size: 0.85rem; }
+  .about-links a { font-weight: 600; }
+  .about-block { margin-bottom: 20px; }
+  .about-block:last-child { margin-bottom: 0; }
+
+  .kite-decor {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: -1;
+  }
+  .kite-decor svg { position: absolute; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15)); }
+
+  @media (max-width: 640px) {
+    body { margin: 24px auto 40px; padding: 0 12px 40px; }
+    .site-header { flex-wrap: wrap; margin-bottom: 16px; padding-right: 54px; }
+    .site-header h1 { font-size: 1.2rem; }
+    .site-header .tagline { font-size: 0.75rem; }
+
+    .profile-widget { top: 10px; right: 10px; }
+    .profile-icon { width: 40px; height: 40px; font-size: 1rem; }
+    .profile-popover { width: min(240px, calc(100vw - 32px)); }
+
+    .tab-nav {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 2px;
+    }
+    .tab-btn { padding: 8px 10px; font-size: 0.85rem; white-space: nowrap; flex: none; }
+
+    form { flex-wrap: wrap; }
+    form input[type="text"] { flex: 1 1 100%; }
+    form button { flex: 1 1 100%; }
+
+    #queue-section button, #playlists-wrap button, #new-playlist-open-btn { margin-top: 6px; }
+    #skip-btn { margin-left: 0; }
+
+    table { font-size: 0.78rem; }
+    th, td { padding: 6px 8px; }
+
+    dialog { width: 92vw; padding: 16px; }
+    #manage-playlist-modal { width: 92vw; }
+    #manage-playlist-add-form { flex-direction: column; }
+    #manage-playlist-add-form button { width: 100%; }
+
+    .kite-decor svg { transform-origin: center; }
+    .kite-decor svg:nth-of-type(1) { transform: rotate(-12deg) scale(0.6); }
+    .kite-decor svg:nth-of-type(2) { transform: rotate(18deg) scale(0.6); }
+    .kite-decor svg:nth-of-type(3) { transform: rotate(8deg) scale(0.6); }
+    .kite-decor svg:nth-of-type(4) { transform: rotate(-20deg) scale(0.6); }
+  }
+
+  @media (max-width: 380px) {
+    .kite-decor { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="kite-decor">
+    <svg width="60" height="120" viewBox="0 0 60 120" style="top:4%; left:6%; opacity:0.6; transform:rotate(-12deg);">
+      <polygon points="30,0 60,38 30,52 0,38" fill="#ff6d00" stroke="#fff" stroke-width="1.5"/>
+      <line x1="30" y1="0" x2="30" y2="52" stroke="#fff" stroke-width="1"/>
+      <line x1="0" y1="38" x2="60" y2="38" stroke="#fff" stroke-width="1"/>
+      <path d="M30,52 Q36,68 30,80 Q24,92 30,104 Q36,116 30,120" stroke="#ff6d00" stroke-width="1.5" fill="none" stroke-dasharray="2,4"/>
+    </svg>
+    <svg width="46" height="94" viewBox="0 0 46 94" style="top:12%; right:8%; opacity:0.55; transform:rotate(18deg);">
+      <polygon points="23,0 46,29 23,40 0,29" fill="#ec407a" stroke="#fff" stroke-width="1.5"/>
+      <line x1="23" y1="0" x2="23" y2="40" stroke="#fff" stroke-width="1"/>
+      <line x1="0" y1="29" x2="46" y2="29" stroke="#fff" stroke-width="1"/>
+      <path d="M23,40 Q28,52 23,62 Q18,72 23,82" stroke="#ec407a" stroke-width="1.5" fill="none" stroke-dasharray="2,4"/>
+    </svg>
+    <svg width="50" height="100" viewBox="0 0 50 100" style="bottom:6%; left:4%; opacity:0.5; transform:rotate(8deg);">
+      <polygon points="25,0 50,31 25,43 0,31" fill="#ffca28" stroke="#fff" stroke-width="1.5"/>
+      <line x1="25" y1="0" x2="25" y2="43" stroke="#fff" stroke-width="1"/>
+      <line x1="0" y1="31" x2="50" y2="31" stroke="#fff" stroke-width="1"/>
+      <path d="M25,43 Q30,56 25,67 Q20,78 25,88" stroke="#ffca28" stroke-width="1.5" fill="none" stroke-dasharray="2,4"/>
+    </svg>
+    <svg width="40" height="82" viewBox="0 0 40 82" style="bottom:14%; right:5%; opacity:0.5; transform:rotate(-20deg);">
+      <polygon points="20,0 40,25 20,35 0,25" fill="#26a69a" stroke="#fff" stroke-width="1.5"/>
+      <line x1="20" y1="0" x2="20" y2="35" stroke="#fff" stroke-width="1"/>
+      <line x1="0" y1="25" x2="40" y2="25" stroke="#fff" stroke-width="1"/>
+      <path d="M20,35 Q24,46 20,55 Q16,64 20,72" stroke="#26a69a" stroke-width="1.5" fill="none" stroke-dasharray="2,4"/>
+    </svg>
+  </div>
+
+  <div class="site-header">
+    <span class="kite-emoji">🪁</span>
+    <div>
+      <h1>Uttarayan Song Queue</h1>
+      <div class="tagline">Kai Po Che! Let the sky — and the playlist — fly.</div>
+    </div>
+  </div>
+
+  <div id="now-playing-banner">
+    <div class="np-row">
+      <span class="np-label">▶ Now playing:</span>
+      <span id="np-playing-text">Loading…</span>
+    </div>
+    <div class="np-row">
+      <span class="np-label">⏭ Up next:</span>
+      <span id="np-next-text">Loading…</span>
+    </div>
+  </div>
+
+  <div class="profile-widget" id="profile-widget">
+    <button type="button" class="profile-icon" id="profile-icon" aria-label="Account">
+      <span id="profile-icon-text">🪁</span>
+    </button>
+    <div class="profile-popover">
+      <form id="login-form">
+        <div class="profile-popover-title">Admin login</div>
+        <input type="text" id="login-username" placeholder="Username" autocomplete="username" required>
+        <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" required>
+        <button type="submit" id="login-btn">Login</button>
+      </form>
+      <div id="logged-in-bar">
+        <span>Logged in as <strong id="logged-in-user"></strong></span>
+        <button type="button" id="logout-btn" class="small secondary">Logout</button>
+      </div>
+      <div id="login-result"></div>
+    </div>
+  </div>
+
+  <nav class="tab-nav">
+    <button type="button" class="tab-btn" data-tab="enqueue">Enqueuing Song</button>
+    <button type="button" class="tab-btn" data-tab="wait">Wait Time of Song</button>
+    <button type="button" class="tab-btn admin-only" id="tab-btn-queue" data-tab="queue">Queue</button>
+    <button type="button" class="tab-btn admin-only" id="tab-btn-playlists" data-tab="playlists">Manage Playlist</button>
+  </nav>
+
+  <div class="tab-panel" data-tab="enqueue">
+    <div id="wait-time-banner">Checking current wait time…</div>
+    <form id="enqueue-form">
+      <input type="text" id="url" placeholder="Paste YouTube URL" required>
+      <button type="submit" id="submit-btn">Enqueue</button>
+    </form>
+    <div id="result"></div>
+  </div>
+
+  <div class="tab-panel" data-tab="wait">
+    <form id="status-form">
+      <input type="text" id="song-id" placeholder="Song ID (from the enqueue result)" required>
+      <button type="submit" id="status-btn">Check</button>
+    </form>
+    <div id="status-result"></div>
+  </div>
+
+  <div class="tab-panel" data-tab="queue">
+    <div id="queue-section">
+      <h1>Queue</h1>
+      <button type="button" id="refresh-queue-btn">Refresh</button>
+      <button type="button" id="skip-btn">Skip current song</button>
+      <div id="skip-result"></div>
+      <div id="queue-wrap">
+        <table id="queue-table" style="display: none;">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>ID</th>
+              <th>Title</th>
+              <th>Uploader</th>
+              <th>URL</th>
+              <th>Status</th>
+              <th>Duration</th>
+              <th>Est. wait</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="queue-body"></tbody>
+        </table>
+        <div id="queue-empty">Queue is empty.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-panel" data-tab="playlists">
+    <div id="default-playlist-section">
+      <h1>Playlists</h1>
+      <p style="color:#888; font-size:0.85rem; margin-top:-16px;">
+        The active playlist plays on loop whenever the real queue is empty. Enqueuing a real song interrupts it immediately.
+      </p>
+      <button type="button" id="new-playlist-open-btn">New playlist</button>
+      <div id="playlists-result"></div>
+      <div id="playlists-wrap" style="overflow-x:auto; margin-top:12px;">
+        <table id="playlists-table" style="display: none;">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Songs</th>
+              <th>Active</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="playlists-body"></tbody>
+        </table>
+        <div id="playlists-empty" style="color:#888; font-size:0.9rem;">No playlists yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <dialog id="new-playlist-modal">
+    <form id="new-playlist-form">
+      <h1 style="margin-bottom:12px;">New playlist</h1>
+      <input type="text" id="new-playlist-name" placeholder="Playlist name" required>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button type="submit" id="new-playlist-save-btn">Save</button>
+        <button type="button" id="new-playlist-cancel-btn" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="manage-playlist-modal">
+    <h1 id="manage-playlist-title" style="margin-bottom:12px;">Manage playlist</h1>
+    <form id="manage-playlist-add-form" style="margin-bottom:12px;">
+      <input type="text" id="manage-playlist-url" placeholder="Paste YouTube URL" required>
+      <button type="submit" id="manage-playlist-add-btn">Add</button>
+    </form>
+    <div id="manage-playlist-result"></div>
+    <div id="manage-playlist-wrap" style="overflow-x:auto; max-height:280px; overflow-y:auto;">
+      <table id="manage-playlist-table" style="display: none;">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Title</th>
+            <th>Uploader</th>
+            <th>URL</th>
+            <th>Duration</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="manage-playlist-body"></tbody>
+      </table>
+      <div id="manage-playlist-empty" style="color:#888; font-size:0.9rem;">No songs yet.</div>
+    </div>
+    <div style="margin-top:12px;">
+      <button type="button" id="manage-playlist-close-btn" class="secondary">Close</button>
+    </div>
+  </dialog>
+
+<footer id="about-section">
+  <h1>About</h1>
+
+  <div class="about-card">
+    <div class="about-avatar">DP</div>
+    <div>
+      <div class="about-name">Darshit Patel</div>
+      <div class="about-title">Software Engineer <!-- swap in your own title/tagline --></div>
+      <div class="about-links">
+        <a href="https://github.com/darshit-patel-01" id="about-github" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://www.linkedin.com/in/darshitpatel2707/" id="about-linkedin" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+        <a href="#" id="about-email">Email</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="about-block">
+    <h2>What this app does</h2>
+    <p>
+      Uttarayan Song Queue is a small self-hosted jukebox: paste a YouTube URL, it gets validated
+      (music only, not age-restricted) and dropped onto a queue, and a single local worker plays
+      songs back to back — downloading each one first so playback survives a flaky connection,
+      then handing it to <code>ffplay</code>. Anyone can enqueue a song or check its wait time; an
+      admin can log in to view the live queue, skip the current or any queued song, and manage
+      one or more "default playlists" that loop automatically whenever the real queue is empty
+      (interrupted instantly the moment a real song gets enqueued).
+    </p>
+  </div>
+
+  <div class="about-block">
+    <h2>System design</h2>
+    <p>
+      <strong>producer_api.py</strong> (FastAPI) exposes the REST endpoints — <code>/enqueue</code>,
+      <code>/status/&lt;id&gt;</code>, <code>/wait-time</code>, and <code>/now-playing</code> are
+      public; <code>/queue</code>, <code>/skip</code>, and the playlist-management endpoints require
+      HTTP Basic admin auth. A valid request publishes one message per song to a single Kafka topic
+      (via <code>confluent-kafka</code>, one broker, one partition — strict order relies on exactly
+      one consumer).
+    </p>
+    <p>
+      <strong>consumer_worker.py</strong> is that lone consumer: it long-polls Kafka, downloads each
+      song's audio with <code>yt-dlp</code> to a temp file, plays it with <code>ffplay</code>, then
+      commits the offset — so a message is never marked done until its audio has actually finished
+      (or failed). When the real queue is empty it falls back to whichever default playlist is
+      marked active, and bails out of that fallback song within ~0.2s if a real song shows up.
+    </p>
+    <p>
+      State (queue position, wait times, playlists, who's playing what) lives in small shared JSON
+      files rather than a database — deliberately simple, since this is a single local user's app,
+      not a distributed system. <code>run.py</code> ties it all together: starts Kafka via Docker
+      Compose, then launches the API and worker as child processes.
+    </p>
+  </div>
+</footer>
+
+<script>
+function formatError(data) {
+  if (typeof data.detail === 'string') return data.detail;
+  if (Array.isArray(data.detail)) {
+    return data.detail.map(e => e.msg || JSON.stringify(e)).join('; ');
+  }
+  return JSON.stringify(data);
+}
+
+// --- Tabs ----------------------------------------------------------------
+
+const tabButtons = document.querySelectorAll('.tab-btn');
+const tabPanels = document.querySelectorAll('.tab-panel');
+
+function switchTab(tabName) {
+  tabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tabName));
+  tabPanels.forEach(panel => panel.classList.toggle('active', panel.dataset.tab === tabName));
+}
+
+tabButtons.forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+
+switchTab('enqueue');
+
+// --- Now playing / up next (public, always visible) ----------------------
+
+function renderNowPlayingRow(containerId, song, emptyText, showIndicator) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  if (!song) {
+    container.textContent = emptyText;
+    return;
+  }
+
+  if (showIndicator) {
+    const indicator = document.createElement('span');
+    indicator.className = 'np-playing-indicator';
+    indicator.setAttribute('aria-hidden', 'true');
+    for (let i = 0; i < 4; i++) {
+      indicator.appendChild(document.createElement('span'));
+    }
+    container.appendChild(indicator);
+    container.appendChild(document.createTextNode(' '));
+  }
+
+  const link = document.createElement('a');
+  link.href = song.url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = song.title || song.url;
+  container.appendChild(link);
+
+  if (song.uploader) {
+    container.appendChild(document.createTextNode(` — ${song.uploader}`));
+  }
+
+  if (song.source === 'playlist') {
+    const badge = document.createElement('span');
+    badge.className = 'np-source';
+    badge.textContent = ' (default playlist)';
+    container.appendChild(badge);
+  }
+}
+
+async function loadNowPlaying() {
+  try {
+    const res = await fetch('/now-playing');
+    const data = await res.json();
+    renderNowPlayingRow('np-playing-text', data.playing, 'Nothing playing right now.', true);
+    renderNowPlayingRow('np-next-text', data.next, 'Nothing queued next.', false);
+  } catch (err) {
+    document.getElementById('np-playing-text').textContent = 'Could not load.';
+    document.getElementById('np-next-text').textContent = 'Could not load.';
+  }
+}
+
+loadNowPlaying();
+setInterval(loadNowPlaying, 10000);
+
+// --- Auth -------------------------------------------------------------
+
+const AUTH_STORAGE_KEY = 'ytplayer_admin_auth';
+
+function getAuthHeader() {
+  const token = sessionStorage.getItem(AUTH_STORAGE_KEY);
+  return token ? { Authorization: 'Basic ' + token } : {};
+}
+
+const profileWidget = document.getElementById('profile-widget');
+const profileIconText = document.getElementById('profile-icon-text');
+
+function setLoggedIn(username) {
+  document.getElementById('login-form').style.display = 'none';
+  const bar = document.getElementById('logged-in-bar');
+  bar.style.display = 'flex';
+  document.getElementById('logged-in-user').textContent = username;
+  document.getElementById('tab-btn-queue').classList.remove('admin-only');
+  document.getElementById('tab-btn-playlists').classList.remove('admin-only');
+  profileWidget.classList.add('logged-in');
+  profileIconText.textContent = username.charAt(0).toUpperCase();
+  loadQueue();
+  loadPlaylists();
+}
+
+function setLoggedOut() {
+  sessionStorage.removeItem(AUTH_STORAGE_KEY);
+  document.getElementById('login-form').style.display = 'flex';
+  document.getElementById('logged-in-bar').style.display = 'none';
+  const queueTabBtn = document.getElementById('tab-btn-queue');
+  const playlistsTabBtn = document.getElementById('tab-btn-playlists');
+  const wasOnAdminTab = queueTabBtn.classList.contains('active') || playlistsTabBtn.classList.contains('active');
+  queueTabBtn.classList.add('admin-only');
+  playlistsTabBtn.classList.add('admin-only');
+  if (wasOnAdminTab) switchTab('enqueue');
+  profileWidget.classList.remove('logged-in');
+  profileIconText.textContent = '🪁';
+}
+
+// Hover opens the popover on desktop; tapping the icon toggles it open on
+// touch devices where :hover doesn't behave the same way. Tapping outside
+// closes it.
+document.getElementById('profile-icon').addEventListener('click', (e) => {
+  e.stopPropagation();
+  profileWidget.classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  if (!profileWidget.contains(e.target)) {
+    profileWidget.classList.remove('open');
+  }
+});
+
+const loginForm = document.getElementById('login-form');
+const loginResult = document.getElementById('login-result');
+
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  if (!username || !password) return;
+
+  const token = btoa(`${username}:${password}`);
+  const loginBtn = document.getElementById('login-btn');
+  loginBtn.disabled = true;
+  loginResult.className = '';
+  loginResult.textContent = 'Logging in...';
+  loginResult.style.display = 'block';
+
+  try {
+    const res = await fetch('/login', {
+      method: 'POST',
+      headers: { Authorization: 'Basic ' + token },
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      loginResult.className = 'err';
+      loginResult.textContent = formatError(data);
+    } else {
+      sessionStorage.setItem(AUTH_STORAGE_KEY, token);
+      loginResult.style.display = 'none';
+      document.getElementById('login-password').value = '';
+      setLoggedIn(data.username);
+    }
+  } catch (err) {
+    loginResult.className = 'err';
+    loginResult.textContent = 'Request failed: ' + err.message;
+  } finally {
+    loginBtn.disabled = false;
+  }
+});
+
+document.getElementById('logout-btn').addEventListener('click', () => {
+  setLoggedOut();
+});
+
+// If we already have stored credentials (e.g. page reload), verify them.
+(async () => {
+  const token = sessionStorage.getItem(AUTH_STORAGE_KEY);
+  if (!token) {
+    setLoggedOut();
+    return;
+  }
+  try {
+    const res = await fetch('/login', {
+      method: 'POST',
+      headers: { Authorization: 'Basic ' + token },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setLoggedIn(data.username);
+    } else {
+      setLoggedOut();
+    }
+  } catch {
+    setLoggedOut();
+  }
+})();
+
+// --- Queue (admin only) ------------------------------------------------
+
+const refreshQueueBtn = document.getElementById('refresh-queue-btn');
+const queueTable = document.getElementById('queue-table');
+const queueBody = document.getElementById('queue-body');
+const queueEmpty = document.getElementById('queue-empty');
+
+async function loadQueue() {
+  if (!sessionStorage.getItem(AUTH_STORAGE_KEY)) return;
+
+  try {
+    const res = await fetch('/queue', { headers: getAuthHeader() });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    const data = await res.json();
+    const songs = data.queue || [];
+
+    queueBody.innerHTML = '';
+    if (songs.length === 0) {
+      queueTable.style.display = 'none';
+      queueEmpty.textContent = 'Queue is empty.';
+      queueEmpty.style.display = 'block';
+      return;
+    }
+    queueEmpty.style.display = 'none';
+    queueTable.style.display = 'table';
+
+    for (const song of songs) {
+      const row = document.createElement('tr');
+      const shortId = song.id.length > 8 ? song.id.slice(0, 8) + '…' : song.id;
+
+      const cell = (text, className) => {
+        const td = document.createElement('td');
+        td.textContent = text;
+        if (className) td.className = className;
+        return td;
+      };
+
+      row.appendChild(cell(song.position_in_queue));
+
+      const idCell = cell(shortId);
+      idCell.title = song.id;
+      row.appendChild(idCell);
+
+      row.appendChild(cell(song.title || '(unknown title)', 'title-cell'));
+      row.appendChild(cell(song.uploader || '(unknown)'));
+
+      const urlCell = document.createElement('td');
+      const link = document.createElement('a');
+      link.href = song.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'link';
+      urlCell.appendChild(link);
+      row.appendChild(urlCell);
+
+      row.appendChild(cell(song.status));
+      row.appendChild(cell(song.duration));
+      row.appendChild(cell(song.estimated_wait));
+
+      const actionCell = document.createElement('td');
+      const skipSongBtn = document.createElement('button');
+      skipSongBtn.type = 'button';
+      skipSongBtn.className = 'small';
+      skipSongBtn.textContent = 'Skip';
+      skipSongBtn.addEventListener('click', () => skipSong(song.id, skipSongBtn));
+      actionCell.appendChild(skipSongBtn);
+      row.appendChild(actionCell);
+
+      queueBody.appendChild(row);
+    }
+  } catch (err) {
+    queueEmpty.textContent = 'Failed to load queue: ' + err.message;
+    queueEmpty.style.display = 'block';
+    queueTable.style.display = 'none';
+  }
+}
+
+async function skipSong(songId, buttonEl) {
+  buttonEl.disabled = true;
+  try {
+    const res = await fetch(`/skip/${encodeURIComponent(songId)}`, {
+      method: 'POST',
+      headers: getAuthHeader(),
+    });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    await loadQueue();
+    loadNowPlaying();
+  } catch (err) {
+    buttonEl.disabled = false;
+  }
+}
+
+refreshQueueBtn.addEventListener('click', loadQueue);
+
+// --- Playlists (admin only) ---------------------------------------------
+
+const newPlaylistOpenBtn = document.getElementById('new-playlist-open-btn');
+const newPlaylistModal = document.getElementById('new-playlist-modal');
+const newPlaylistForm = document.getElementById('new-playlist-form');
+const newPlaylistNameInput = document.getElementById('new-playlist-name');
+const newPlaylistSaveBtn = document.getElementById('new-playlist-save-btn');
+const newPlaylistCancelBtn = document.getElementById('new-playlist-cancel-btn');
+const playlistsResult = document.getElementById('playlists-result');
+const playlistsTable = document.getElementById('playlists-table');
+const playlistsBody = document.getElementById('playlists-body');
+const playlistsEmpty = document.getElementById('playlists-empty');
+
+async function loadPlaylists() {
+  if (!sessionStorage.getItem(AUTH_STORAGE_KEY)) return;
+
+  try {
+    const res = await fetch('/playlists', { headers: getAuthHeader() });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    const data = await res.json();
+    const playlists = data.playlists || [];
+
+    playlistsBody.innerHTML = '';
+    if (playlists.length === 0) {
+      playlistsTable.style.display = 'none';
+      playlistsEmpty.style.display = 'block';
+      return;
+    }
+    playlistsEmpty.style.display = 'none';
+    playlistsTable.style.display = 'table';
+
+    for (const playlist of playlists) {
+      const row = document.createElement('tr');
+
+      const cell = (text) => {
+        const td = document.createElement('td');
+        td.textContent = text;
+        return td;
+      };
+
+      row.appendChild(cell(playlist.name));
+      row.appendChild(cell(playlist.song_count));
+
+      const activeCell = document.createElement('td');
+      if (playlist.is_active) {
+        const badge = document.createElement('span');
+        badge.textContent = 'Active';
+        badge.style.color = '#1b5e20';
+        badge.style.fontWeight = '600';
+        activeCell.appendChild(badge);
+
+        const deactivateBtn = document.createElement('button');
+        deactivateBtn.type = 'button';
+        deactivateBtn.className = 'small secondary';
+        deactivateBtn.style.marginLeft = '6px';
+        deactivateBtn.textContent = 'Deactivate';
+        deactivateBtn.addEventListener('click', () => deactivatePlaylist(playlist.id, deactivateBtn));
+        activeCell.appendChild(deactivateBtn);
+      } else {
+        const activateBtn = document.createElement('button');
+        activateBtn.type = 'button';
+        activateBtn.className = 'small secondary';
+        activateBtn.textContent = 'Set active';
+        activateBtn.addEventListener('click', () => activatePlaylist(playlist.id, activateBtn));
+        activeCell.appendChild(activateBtn);
+      }
+      row.appendChild(activeCell);
+
+      const actionCell = document.createElement('td');
+      const manageBtn = document.createElement('button');
+      manageBtn.type = 'button';
+      manageBtn.className = 'small';
+      manageBtn.textContent = 'Manage';
+      manageBtn.addEventListener('click', () => openManagePlaylist(playlist.id, playlist.name));
+      actionCell.appendChild(manageBtn);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'small secondary';
+      deleteBtn.style.marginLeft = '6px';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.addEventListener('click', () => deletePlaylist(playlist.id, playlist.name, deleteBtn));
+      actionCell.appendChild(deleteBtn);
+
+      row.appendChild(actionCell);
+      playlistsBody.appendChild(row);
+    }
+  } catch (err) {
+    playlistsEmpty.textContent = 'Failed to load playlists: ' + err.message;
+    playlistsEmpty.style.display = 'block';
+    playlistsTable.style.display = 'none';
+  }
+}
+
+async function activatePlaylist(playlistId, buttonEl) {
+  buttonEl.disabled = true;
+  try {
+    const res = await fetch(`/playlists/${encodeURIComponent(playlistId)}/activate`, {
+      method: 'POST',
+      headers: getAuthHeader(),
+    });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    await loadPlaylists();
+  } catch (err) {
+    buttonEl.disabled = false;
+  }
+}
+
+async function deactivatePlaylist(playlistId, buttonEl) {
+  buttonEl.disabled = true;
+  try {
+    const res = await fetch(`/playlists/${encodeURIComponent(playlistId)}/deactivate`, {
+      method: 'POST',
+      headers: getAuthHeader(),
+    });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    await loadPlaylists();
+  } catch (err) {
+    buttonEl.disabled = false;
+  }
+}
+
+async function deletePlaylist(playlistId, playlistName, buttonEl) {
+  if (!confirm(`Delete playlist "${playlistName}"? This removes all its songs too.`)) return;
+  buttonEl.disabled = true;
+  try {
+    const res = await fetch(`/playlists/${encodeURIComponent(playlistId)}`, {
+      method: 'DELETE',
+      headers: getAuthHeader(),
+    });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    await loadPlaylists();
+  } catch (err) {
+    buttonEl.disabled = false;
+  }
+}
+
+newPlaylistOpenBtn.addEventListener('click', () => {
+  playlistsResult.style.display = 'none';
+  newPlaylistNameInput.value = '';
+  newPlaylistModal.showModal();
+  newPlaylistNameInput.focus();
+});
+
+newPlaylistCancelBtn.addEventListener('click', () => {
+  newPlaylistModal.close();
+});
+
+newPlaylistForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = newPlaylistNameInput.value.trim();
+  if (!name) return;
+
+  newPlaylistSaveBtn.disabled = true;
+  try {
+    const res = await fetch('/playlists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify({ name }),
+    });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    const data = await res.json();
+
+    if (!res.ok) {
+      playlistsResult.className = 'err';
+      playlistsResult.textContent = formatError(data);
+      playlistsResult.style.display = 'block';
+    } else {
+      newPlaylistModal.close();
+      loadPlaylists();
+    }
+  } catch (err) {
+    playlistsResult.className = 'err';
+    playlistsResult.textContent = 'Request failed: ' + err.message;
+    playlistsResult.style.display = 'block';
+  } finally {
+    newPlaylistSaveBtn.disabled = false;
+  }
+});
+
+// --- Manage playlist songs (admin only) ---------------------------------
+
+const managePlaylistModal = document.getElementById('manage-playlist-modal');
+const managePlaylistTitle = document.getElementById('manage-playlist-title');
+const managePlaylistAddForm = document.getElementById('manage-playlist-add-form');
+const managePlaylistUrlInput = document.getElementById('manage-playlist-url');
+const managePlaylistAddBtn = document.getElementById('manage-playlist-add-btn');
+const managePlaylistResult = document.getElementById('manage-playlist-result');
+const managePlaylistTable = document.getElementById('manage-playlist-table');
+const managePlaylistBody = document.getElementById('manage-playlist-body');
+const managePlaylistEmpty = document.getElementById('manage-playlist-empty');
+const managePlaylistCloseBtn = document.getElementById('manage-playlist-close-btn');
+
+let currentManagedPlaylistId = null;
+
+function openManagePlaylist(playlistId, playlistName) {
+  currentManagedPlaylistId = playlistId;
+  managePlaylistTitle.textContent = `Manage playlist: ${playlistName}`;
+  managePlaylistResult.style.display = 'none';
+  managePlaylistUrlInput.value = '';
+  managePlaylistModal.showModal();
+  loadManagedPlaylistSongs();
+}
+
+async function loadManagedPlaylistSongs() {
+  if (!currentManagedPlaylistId) return;
+  try {
+    const res = await fetch(`/playlists/${encodeURIComponent(currentManagedPlaylistId)}/songs`, {
+      headers: getAuthHeader(),
+    });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    const data = await res.json();
+    const songs = data.songs || [];
+
+    managePlaylistBody.innerHTML = '';
+    if (songs.length === 0) {
+      managePlaylistTable.style.display = 'none';
+      managePlaylistEmpty.style.display = 'block';
+      return;
+    }
+    managePlaylistEmpty.style.display = 'none';
+    managePlaylistTable.style.display = 'table';
+
+    songs.forEach((song, index) => {
+      const row = document.createElement('tr');
+
+      const cell = (text, className) => {
+        const td = document.createElement('td');
+        td.textContent = text;
+        if (className) td.className = className;
+        return td;
+      };
+
+      row.appendChild(cell(index + 1));
+      row.appendChild(cell(song.title || '(unknown title)', 'title-cell'));
+      row.appendChild(cell(song.uploader || '(unknown)'));
+
+      const urlCell = document.createElement('td');
+      const link = document.createElement('a');
+      link.href = song.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'link';
+      urlCell.appendChild(link);
+      row.appendChild(urlCell);
+
+      row.appendChild(cell(song.duration));
+
+      const actionCell = document.createElement('td');
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'small secondary';
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', () => removeManagedPlaylistSong(song.id, removeBtn));
+      actionCell.appendChild(removeBtn);
+      row.appendChild(actionCell);
+
+      managePlaylistBody.appendChild(row);
+    });
+  } catch (err) {
+    managePlaylistEmpty.textContent = 'Failed to load songs: ' + err.message;
+    managePlaylistEmpty.style.display = 'block';
+    managePlaylistTable.style.display = 'none';
+  }
+}
+
+async function removeManagedPlaylistSong(songId, buttonEl) {
+  if (!currentManagedPlaylistId) return;
+  buttonEl.disabled = true;
+  try {
+    const res = await fetch(
+      `/playlists/${encodeURIComponent(currentManagedPlaylistId)}/songs/${encodeURIComponent(songId)}`,
+      { method: 'DELETE', headers: getAuthHeader() }
+    );
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    await loadManagedPlaylistSongs();
+    loadPlaylists();
+  } catch (err) {
+    buttonEl.disabled = false;
+  }
+}
+
+managePlaylistAddForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!currentManagedPlaylistId) return;
+  const url = managePlaylistUrlInput.value.trim();
+  if (!url) return;
+
+  managePlaylistAddBtn.disabled = true;
+  managePlaylistResult.className = '';
+  managePlaylistResult.textContent = 'Adding...';
+  managePlaylistResult.style.display = 'block';
+
+  try {
+    const res = await fetch(`/playlists/${encodeURIComponent(currentManagedPlaylistId)}/songs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify({ urls: [url] }),
+    });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    const data = await res.json();
+
+    if (!res.ok) {
+      managePlaylistResult.className = 'err';
+      managePlaylistResult.textContent = formatError(data);
+    } else if (data.added.length > 0) {
+      managePlaylistResult.style.display = 'none';
+      managePlaylistUrlInput.value = '';
+      loadManagedPlaylistSongs();
+      loadPlaylists();
+    } else {
+      const rejection = data.rejected[0];
+      managePlaylistResult.className = 'err';
+      managePlaylistResult.textContent = rejection ? rejection.reason : 'Rejected.';
+    }
+  } catch (err) {
+    managePlaylistResult.className = 'err';
+    managePlaylistResult.textContent = 'Request failed: ' + err.message;
+  } finally {
+    managePlaylistAddBtn.disabled = false;
+  }
+});
+
+managePlaylistCloseBtn.addEventListener('click', () => {
+  managePlaylistModal.close();
+  currentManagedPlaylistId = null;
+});
+
+// --- Skip current song (admin only) ------------------------------------
+
+const skipBtn = document.getElementById('skip-btn');
+const skipResult = document.getElementById('skip-result');
+
+skipBtn.addEventListener('click', async () => {
+  skipBtn.disabled = true;
+  skipResult.className = '';
+  skipResult.textContent = 'Skipping...';
+  skipResult.style.display = 'block';
+
+  try {
+    const res = await fetch('/skip', { method: 'POST', headers: getAuthHeader() });
+    if (res.status === 401) {
+      setLoggedOut();
+      return;
+    }
+    const data = await res.json();
+
+    if (!res.ok) {
+      skipResult.className = 'err';
+      skipResult.textContent = formatError(data);
+    } else {
+      skipResult.className = 'ok';
+      skipResult.textContent = 'Skip requested.';
+      loadQueue();
+      loadNowPlaying();
+    }
+  } catch (err) {
+    skipResult.className = 'err';
+    skipResult.textContent = 'Request failed: ' + err.message;
+  } finally {
+    skipBtn.disabled = false;
+  }
+});
+
+// --- Enqueue (open to everyone) -----------------------------------------
+
+const waitTimeBanner = document.getElementById('wait-time-banner');
+
+// Ticks down locally every second between the periodic server refetches
+// below, so the displayed wait time counts down in real time instead of
+// only updating every 15s.
+let waitTimeState = { loaded: false, queueLength: 0, estimatedWaitSeconds: 0 };
+
+function formatDurationLocal(totalSeconds) {
+  totalSeconds = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  if (hours) return `${hours}h ${minutes}m ${secs}s`;
+  if (minutes) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
+function renderWaitTimeBanner() {
+  if (!waitTimeState.loaded) return;
+  waitTimeBanner.textContent =
+    waitTimeState.queueLength === 0
+      ? 'Queue is empty — a new song would start right away.'
+      : `A song enqueued right now would start in about ${formatDurationLocal(waitTimeState.estimatedWaitSeconds)} ` +
+        `(${waitTimeState.queueLength} song${waitTimeState.queueLength === 1 ? '' : 's'} ahead).`;
+}
+
+async function loadWaitTime() {
+  try {
+    const res = await fetch('/wait-time');
+    const data = await res.json();
+    if (!res.ok) {
+      waitTimeBanner.textContent = 'Could not load current wait time.';
+      return;
+    }
+    waitTimeState = {
+      loaded: true,
+      queueLength: data.queue_length,
+      estimatedWaitSeconds: data.estimated_wait_seconds,
+    };
+    renderWaitTimeBanner();
+  } catch (err) {
+    waitTimeBanner.textContent = 'Could not load current wait time.';
+  }
+}
+
+loadWaitTime();
+// Resync with the server periodically (corrects for skips, other people
+// enqueueing, etc.); the 1s tick below keeps the display live in between.
+setInterval(loadWaitTime, 15000);
+setInterval(() => {
+  if (waitTimeState.loaded && waitTimeState.queueLength > 0) {
+    waitTimeState.estimatedWaitSeconds = Math.max(0, waitTimeState.estimatedWaitSeconds - 1);
+    renderWaitTimeBanner();
+  }
+}, 1000);
+
+const form = document.getElementById('enqueue-form');
+const urlInput = document.getElementById('url');
+const submitBtn = document.getElementById('submit-btn');
+const result = document.getElementById('result');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = urlInput.value.trim();
+  if (!url) return;
+
+  submitBtn.disabled = true;
+  result.className = '';
+  result.textContent = 'Enqueuing...';
+  result.style.display = 'block';
+
+  try {
+    const res = await fetch('/enqueue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify({ urls: [url] }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      result.className = 'err';
+      result.textContent = formatError(data);
+    } else if (data.enqueued.length > 0) {
+      const song = data.enqueued[0];
+      result.className = 'ok';
+      result.textContent =
+        `Queued! ID: ${song.id}\n` +
+        `${song.title || '(unknown title)'} — ${song.uploader || '(unknown uploader)'}\n` +
+        `Position ${song.position_in_queue}, duration ${song.duration}, ` +
+        `estimated wait ${song.estimated_wait}.`;
+      urlInput.value = '';
+      loadQueue();
+      loadWaitTime();
+      loadNowPlaying();
+    } else {
+      const rejection = data.rejected[0];
+      result.className = 'err';
+      result.textContent = rejection ? rejection.reason : 'Rejected.';
+      urlInput.value = '';
+    }
+  } catch (err) {
+    result.className = 'err';
+    result.textContent = 'Request failed: ' + err.message;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+// --- Check wait time (open to everyone) ----------------------------------
+
+const statusForm = document.getElementById('status-form');
+const songIdInput = document.getElementById('song-id');
+const statusBtn = document.getElementById('status-btn');
+const statusResult = document.getElementById('status-result');
+
+statusForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const songId = songIdInput.value.trim();
+  if (!songId) return;
+
+  statusBtn.disabled = true;
+  statusResult.className = '';
+  statusResult.textContent = 'Checking...';
+  statusResult.style.display = 'block';
+
+  try {
+    const res = await fetch(`/status/${encodeURIComponent(songId)}`);
+    const data = await res.json();
+
+    if (!res.ok) {
+      statusResult.className = 'err';
+      statusResult.textContent = formatError(data);
+    } else {
+      statusResult.className = 'ok';
+      statusResult.textContent =
+        `${data.title || '(unknown title)'} — ${data.uploader || '(unknown uploader)'}\n` +
+        `Status: ${data.status}. Position ${data.position_in_queue}, ` +
+        `estimated wait ${data.estimated_wait}.`;
+    }
+  } catch (err) {
+    statusResult.className = 'err';
+    statusResult.textContent = 'Request failed: ' + err.message;
+  } finally {
+    statusBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
