@@ -520,46 +520,20 @@
       <div class="about-links">
         <a href="https://github.com/darshit-patel-01" id="about-github" target="_blank" rel="noopener noreferrer">GitHub</a>
         <a href="https://www.linkedin.com/in/darshitpatel2707/" id="about-linkedin" target="_blank" rel="noopener noreferrer">LinkedIn</a>
-        <a href="#" id="about-email">Email</a>
+        <a href="mailto:darshitpatel94@outlook.com" id="about-email">Email</a>
       </div>
     </div>
   </div>
 
   <div class="about-block">
-    <h2>What this app does</h2>
+    <h2>What this is</h2>
     <p>
-      Uttarayan Song Queue is a small self-hosted jukebox: paste a YouTube URL, it gets validated
-      (music only, not age-restricted) and dropped onto a queue, and a single local worker plays
-      songs back to back — downloading each one first so playback survives a flaky connection,
-      then handing it to <code>ffplay</code>. Anyone can enqueue a song or check its wait time; an
-      admin can log in to view the live queue, skip the current or any queued song, and manage
-      one or more "default playlists" that loop automatically whenever the real queue is empty
-      (interrupted instantly the moment a real song gets enqueued).
-    </p>
-  </div>
-
-  <div class="about-block">
-    <h2>System design</h2>
-    <p>
-      <strong>producer_api.py</strong> (FastAPI) exposes the REST endpoints — <code>/enqueue</code>,
-      <code>/status/&lt;id&gt;</code>, <code>/wait-time</code>, and <code>/now-playing</code> are
-      public; <code>/queue</code>, <code>/skip</code>, and the playlist-management endpoints require
-      HTTP Basic admin auth. A valid request publishes one message per song to a single Kafka topic
-      (via <code>confluent-kafka</code>, one broker, one partition — strict order relies on exactly
-      one consumer).
-    </p>
-    <p>
-      <strong>consumer_worker.py</strong> is that lone consumer: it long-polls Kafka, downloads each
-      song's audio with <code>yt-dlp</code> to a temp file, plays it with <code>ffplay</code>, then
-      commits the offset — so a message is never marked done until its audio has actually finished
-      (or failed). When the real queue is empty it falls back to whichever default playlist is
-      marked active, and bails out of that fallback song within ~0.2s if a real song shows up.
-    </p>
-    <p>
-      State (queue position, wait times, playlists, who's playing what) lives in small shared JSON
-      files rather than a database — deliberately simple, since this is a single local user's app,
-      not a distributed system. <code>run.py</code> ties it all together: starts Kafka via Docker
-      Compose, then launches the API and worker as child processes.
+      A shared music queue for Uttarayan — paste a YouTube song link and it joins the line to play
+      out loud, one song at a time, in the order it was added. No need to pass a phone around or
+      fight over the aux cable: everyone can add a song from their own phone, see how long the
+      wait is before their song plays, and skip to the next one if they're an admin. When nobody's
+      added anything, a background playlist keeps the music going so there's never silence — and
+      it steps aside the instant someone adds a real song.
     </p>
   </div>
 </footer>

@@ -146,6 +146,12 @@ mis-categorized by uploaders and may get rejected, and this won't catch
 adult content that YouTube itself hasn't age-flagged. Tighten or loosen the
 checks in `validate_song_url()` if you find false positives/negatives.
 
+## Exposing this to the public internet
+
+See [TAILSCALE.md](TAILSCALE.md) for how to make this app reachable from
+outside your local network over HTTPS, using Tailscale Funnel — no router
+port-forwarding or manual TLS setup required.
+
 ## Notes / things you may want to change later
 
 - **Download-then-play**: each song is downloaded with `yt-dlp` to a
