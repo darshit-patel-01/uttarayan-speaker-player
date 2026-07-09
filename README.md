@@ -75,9 +75,96 @@ uvicorn producer_api:app --host 0.0.0.0 --port 8000
 
 ## Adding songs via WhatsApp
 
-See [whatsapp-bridge/README.md](whatsapp-bridge/README.md) for an optional
-sidecar that lets people enqueue songs by texting a YouTube link to a
-WhatsApp number, instead of using the web form.
+`whatsapp-bridge/` is an optional Node.js sidecar that watches a WhatsApp
+number for messages and forwards YouTube links straight to `/enqueue` — so
+people can add a song by texting a link, no need to open the web page.
+
+**Important:** it connects to WhatsApp the same way WhatsApp Web does (via
+[Baileys](https://github.com/WhiskeySockets/Baileys)), not through Meta's
+official Business API:
+
+- No business approval or paid number needed — just scan a QR code with any
+  WhatsApp account, like linking a new device.
+- It is **not officially sanctioned by WhatsApp**. The number could get
+  rate-limited or banned, and this can break whenever WhatsApp updates their
+  app. Use a spare/throwaway number, not one you depend on.
+
+### Setup
+
+```bash
+cd whatsapp-bridge
+npm install
+cp .env.example .env
+```
+
+Env vars (`whatsapp-bridge/.env`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ENQUEUE_URL` | `http://localhost:8000/enqueue` | Where the main app's API is reachable |
+| `ADMIN_USERNAME` | `admin` | Must match the main app's `.env` |
+| `ADMIN_PASSWORD` | *(empty)* | Must match the main app's `.env` — used to authenticate admin-bypass requests |
+| `ADMIN_PHONE_NUMBERS` | *(empty)* | Comma-separated phone numbers (digits only, no `+`, no country code needed) whose requests skip all validation |
+
+### Running
+
+```bash
+npm start
+```
+
+On first run it prints a QR code in the terminal:
+
+1. Open WhatsApp on the phone you want to use → **Settings → Linked
+   Devices → Link a Device**.
+2. Scan the QR code shown in the terminal.
+
+Once connected, it stays logged in — the session is saved to
+`whatsapp-bridge/auth_info_baileys/` (never commit this folder; it's
+equivalent to being logged into that WhatsApp account). You won't need to
+scan again unless you delete that folder or WhatsApp logs the device out.
+
+Leave this running (e.g. in its own terminal, alongside `python run.py`)
+for it to keep forwarding messages.
+
+### How it behaves
+
+- Only messages of the form `play <youtube link>` are picked up — the word
+  "play" (case-insensitive) has to come right before the link. This is
+  intentional: it lets people share YouTube links in chat normally without
+  every link accidentally getting queued.
+  - Matches: `play https://youtu.be/dQw4w9WgXcQ`, `Play https://www.youtube.com/watch?v=...`
+  - Ignored: a bare link with no "play" in front, or "play" appearing
+    somewhere else in the message with no link right after it.
+- A matched link gets forwarded to `/enqueue`, exactly like pasting it into
+  the web form — same validation (music-only, not age-restricted, under 2
+  hours), same queue.
+- The bridge replies in the same chat with the result: ✅ queued with
+  position/wait time, or ❌ with the rejection reason.
+- Everything else (no "play" + link pattern found) is silently ignored.
+- Numbers in `ADMIN_PHONE_NUMBERS` skip validation entirely, same as
+  logging in as admin on the web form — the reply gets a
+  `👑 Admin request (validation skipped)` prefix. Matching is by substring,
+  since WhatsApp doesn't always report a sender's country code the same way
+  (e.g. `@lid`-based JIDs for non-contacts get resolved back to a real phone
+  number via Baileys' LID↔phone-number mapping before being checked).
+  Everyone else goes through the same public validation as the web form's
+  "Enqueuing Song" tab.
+
+### Request log
+
+Every matched request and its outcome is appended to
+`whatsapp-bridge/requests.log` — one line per event, timestamped, e.g.:
+
+```
+2026-07-09T02:14:03.881Z REQUEST phone=15551234567 admin=true url=https://youtu.be/XlFebTyooag
+2026-07-09T02:14:04.512Z RESULT queued phone=15551234567 admin=true url=https://youtu.be/XlFebTyooag title="..." position=1
+```
+
+Use it to see who used the bridge and what they requested — e.g.
+`grep admin=true requests.log` for admin-bypass requests, or
+`grep 15551234567 requests.log` for everything from one number. It's
+gitignored (contains phone numbers) and grows indefinitely — rotate or
+delete it periodically if that matters to you.
 
 ## Usage
 
