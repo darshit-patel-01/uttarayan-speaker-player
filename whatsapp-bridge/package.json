@@ -1,0 +1,16 @@
+{
+  "name": "whatsapp-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Watches a WhatsApp number for YouTube links and forwards them to the ytplayer /enqueue endpoint.",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
+    "pino": "^9.4.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

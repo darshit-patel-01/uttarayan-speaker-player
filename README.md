@@ -73,6 +73,12 @@ uvicorn producer_api:app --host 0.0.0.0 --port 8000
 
 </details>
 
+## Adding songs via WhatsApp
+
+See [whatsapp-bridge/README.md](whatsapp-bridge/README.md) for an optional
+sidecar that lets people enqueue songs by texting a YouTube link to a
+WhatsApp number, instead of using the web form.
+
 ## Usage
 
 Enqueue one or more videos:

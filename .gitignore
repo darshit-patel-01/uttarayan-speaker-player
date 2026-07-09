@@ -1,0 +1,11 @@
+.idea
+kafka-demo.iml
+target
+.git
+.claude
+.venv
+__pycache__
+venv
+.default_playlist.json
+.queue_state.json
+.env
