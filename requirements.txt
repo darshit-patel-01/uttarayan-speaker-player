@@ -4,3 +4,6 @@ confluent-kafka
 yt-dlp
 pydantic
 python-dotenv
+psutil
+edge-tts
+redis

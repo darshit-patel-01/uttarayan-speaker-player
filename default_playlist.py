@@ -145,6 +145,10 @@ def add_song(
         playlist = data["playlists"].get(playlist_id)
         if playlist is None:
             return None
+        # Dedup by URL: don't allow the same song twice in the same playlist
+        for existing in playlist["items"]:
+            if existing.get("url") == url:
+                return {"duplicate": True, "url": url, "title": existing.get("title")}
         existing_song_ids = {item["id"] for item in playlist["items"]}
         item = {
             "id": _generate_id(existing_song_ids),
@@ -217,6 +221,7 @@ def peek_next_song() -> Optional[dict]:
 
 def set_now_playing(song: dict) -> None:
     """Called by the consumer right before it starts playing a default-playlist song."""
+    import time as _time
     with _lock:
         data = _load()
         data["now_playing"] = {
@@ -224,8 +229,49 @@ def set_now_playing(song: dict) -> None:
             "url": song["url"],
             "title": song.get("title"),
             "uploader": song.get("uploader"),
+            "duration": song.get("duration"),
+            "started_at": _time.time(),
+            "seek_offset": 0,
+            "paused_duration": 0,
+            "paused_at": None,
         }
         _save(data)
+
+
+def mark_now_playing_paused() -> None:
+    import time as _time
+    with _lock:
+        data = _load()
+        np = data.get("now_playing")
+        if np and np.get("paused_at") is None:
+            np["paused_at"] = _time.time()
+            _save(data)
+
+
+def mark_now_playing_resumed() -> None:
+    import time as _time
+    with _lock:
+        data = _load()
+        np = data.get("now_playing")
+        if np and np.get("paused_at") is not None:
+            np["paused_duration"] = (np.get("paused_duration") or 0) + (
+                _time.time() - np["paused_at"]
+            )
+            np["paused_at"] = None
+            _save(data)
+
+
+def mark_now_playing_seeked(offset: float) -> None:
+    import time as _time
+    with _lock:
+        data = _load()
+        np = data.get("now_playing")
+        if np:
+            np["seek_offset"] = offset
+            np["started_at"] = _time.time()
+            np["paused_duration"] = 0
+            np["paused_at"] = None
+            _save(data)
 
 
 def clear_now_playing() -> None:
@@ -234,6 +280,32 @@ def clear_now_playing() -> None:
         data = _load()
         data["now_playing"] = None
         _save(data)
+
+
+def reorder_songs(playlist_id: str, ordered_ids: List[str]) -> bool:
+    """
+    Reorders a playlist's songs to match the given list of song IDs.
+    IDs not present in the playlist are ignored; any existing songs not
+    in ordered_ids are appended at the end (safety net for partial lists).
+    Returns False if the playlist doesn't exist.
+    """
+    with _lock:
+        data = _load()
+        playlist = data["playlists"].get(playlist_id)
+        if playlist is None:
+            return False
+        items_by_id = {item["id"]: item for item in playlist["items"]}
+        # Build reordered list from the provided IDs, skip unknown IDs
+        new_items = [items_by_id[sid] for sid in ordered_ids if sid in items_by_id]
+        # Append any existing songs not mentioned (safety net)
+        included = {sid for sid in ordered_ids if sid in items_by_id}
+        for item in playlist["items"]:
+            if item["id"] not in included:
+                new_items.append(item)
+        playlist["items"] = new_items
+        playlist["next_index"] = playlist["next_index"] % len(new_items) if new_items else 0
+        _save(data)
+        return True
 
 
 def get_now_playing() -> Optional[dict]:

@@ -11,12 +11,30 @@ writes.
 import json
 import os
 import random
+import re
 import string
 import threading
 import time
 from typing import Optional, Tuple
 
+import analytics
 from config import settings
+
+# Same URL shapes as producer_api/real_time_validation, kept local to avoid a
+# circular import (real_time_validation imports this module). Used to collapse
+# different URL forms of the same video (?si=, ?v=, bare, …) in history.
+_VIDEO_ID_RE = re.compile(
+    r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]+)"
+)
+
+
+def _video_key(url: Optional[str], video_id: Optional[str]) -> str:
+    """A stable per-video key: the video_id if known, else derived from the
+    URL, else the raw URL as a last resort."""
+    if video_id:
+        return video_id
+    match = _VIDEO_ID_RE.search(url or "")
+    return match.group(1) if match else (url or "")
 
 _ID_ALPHABET = string.ascii_letters + string.digits
 _ID_LENGTH = 4
@@ -44,11 +62,27 @@ def _save(data: dict) -> None:
     os.replace(tmp_path, settings.queue_state_file)
 
 
+def _elapsed_seconds(item: dict) -> float:
+    """
+    Computes how many seconds of the song have actually been heard, accounting
+    for seeks (seek_offset), paused time (paused_duration + current pause),
+    and the wall-clock start time of the current playback run (started_at).
+    """
+    seek_offset = item.get("seek_offset") or 0
+    started_at = item.get("started_at") or time.time()
+    paused_duration = item.get("paused_duration") or 0
+    paused_at = item.get("paused_at")
+
+    elapsed = seek_offset + (time.time() - started_at) - paused_duration
+    if paused_at:
+        elapsed -= (time.time() - paused_at)
+    return max(0.0, elapsed)
+
+
 def _remaining_seconds(item: dict) -> float:
     duration = item.get("duration") or 0
     if item.get("status") == "playing" and item.get("started_at"):
-        elapsed = time.time() - item["started_at"]
-        return max(duration - elapsed, 0)
+        return max(duration - _elapsed_seconds(item), 0)
     return duration
 
 
@@ -68,20 +102,16 @@ def add_song(
     title: Optional[str] = None,
     uploader: Optional[str] = None,
     video_id: Optional[str] = None,
+    source: Optional[str] = None,
+    requester_id: Optional[str] = None,
 ) -> Tuple[str, int, float]:
     """
     Registers a newly-enqueued song and returns:
       (song_id, position_in_queue, estimated_wait_seconds)
 
-    song_id is a random 4-character alphanumeric string, generated fresh per
-    song rather than derived from the YouTube URL/video ID, so it's short
-    and easy to hand back to the caller for later status lookups.
-
-    video_id (the YouTube video ID, separate from song_id) is stored so
-    find_by_video_id() can detect the same video being enqueued twice.
-
-    position_in_queue is 1-indexed (1 means "plays next"). estimated_wait_seconds
-    is the sum of the (remaining) durations of every song currently ahead of it.
+    requester_id (e.g. "whatsapp:15551234567") is stored for analytics only;
+    it is never included in the public serializers (list_queue, now-playing,
+    status), so it doesn't leak to non-admins.
     """
     with _lock:
         data = _load()
@@ -100,7 +130,12 @@ def add_song(
                 "uploader": uploader,
                 "duration": duration,
                 "status": "queued",
+                "source": source,   # "web" | "whatsapp" | "telegram" | "api"
+                "requester_id": requester_id,
                 "started_at": None,
+                "seek_offset": 0,
+                "paused_duration": 0,
+                "paused_at": None,
             }
         )
         _save(data)
@@ -108,11 +143,6 @@ def add_song(
 
 
 def get_status(song_id: str) -> Optional[dict]:
-    """
-    Looks up a song by ID and returns its current status, position in queue,
-    and estimated wait time — or None if the ID is unknown (never enqueued,
-    or already finished playing).
-    """
     with _lock:
         data = _load()
         items = data["items"]
@@ -134,11 +164,6 @@ def get_status(song_id: str) -> Optional[dict]:
 
 
 def find_by_video_id(video_id: str) -> Optional[dict]:
-    """
-    Looks up a song already in the queue (queued or playing) by its YouTube
-    video ID, to detect the same video being enqueued twice. Same return
-    shape as get_status(), or None if no match.
-    """
     with _lock:
         data = _load()
         items = data["items"]
@@ -152,6 +177,7 @@ def find_by_video_id(video_id: str) -> Optional[dict]:
                     "title": item.get("title"),
                     "uploader": item.get("uploader"),
                     "status": item["status"],
+                    "skip_requested": item.get("skip_requested", False),
                     "position_in_queue": index + 1,
                     "duration_seconds": item.get("duration"),
                     "estimated_wait_seconds": estimated_wait_seconds,
@@ -160,12 +186,6 @@ def find_by_video_id(video_id: str) -> Optional[dict]:
 
 
 def current_wait() -> Tuple[int, float]:
-    """
-    Returns (queue_length, estimated_wait_seconds): how many songs are
-    currently queued/playing, and how long a song enqueued right now would
-    have to wait before it starts (the same calculation add_song() would
-    produce, without actually adding anything).
-    """
     with _lock:
         data = _load()
         items = data["items"]
@@ -173,16 +193,17 @@ def current_wait() -> Tuple[int, float]:
 
 
 def list_queue() -> list:
-    """
-    Returns every song currently in the queue, in play order, each annotated
-    with its position and estimated wait time (same shape as get_status()).
-    """
     with _lock:
         data = _load()
         items = data["items"]
         result = []
         songs_ahead = []
         for index, item in enumerate(items):
+            # Hide songs already marked for skip — they're gone from the
+            # user's perspective; the consumer will discard them when it
+            # pulls their Kafka message.
+            if item.get("skip_requested") and item["status"] != "playing":
+                continue
             estimated_wait_seconds = sum(_remaining_seconds(s) for s in songs_ahead)
             result.append(
                 {
@@ -194,31 +215,57 @@ def list_queue() -> list:
                     "position_in_queue": index + 1,
                     "duration_seconds": item.get("duration"),
                     "estimated_wait_seconds": estimated_wait_seconds,
+                    "source": item.get("source"),
                 }
             )
             songs_ahead.append(item)
         return result
 
 
+def get_playing_progress() -> Optional[dict]:
+    """
+    Returns progress info for the currently playing song, or None if nothing
+    is playing. Used by /now-playing to include elapsed/duration/paused state.
+    """
+    with _lock:
+        data = _load()
+        for item in data["items"]:
+            if item.get("status") == "playing":
+                return {
+                    "elapsed_seconds": round(_elapsed_seconds(item), 1),
+                    "duration_seconds": item.get("duration"),
+                    "is_paused": item.get("paused_at") is not None,
+                }
+        return None
+
+
 def has_pending_songs() -> bool:
-    """True if there's at least one real (Kafka-backed) song queued or
-    playing. Used to decide whether to fall back to the default playlist,
-    and as the interrupt check while a default-playlist song is playing."""
     with _lock:
         return len(_load()["items"]) > 0
 
 
-def mark_skip_requested(song_id: str) -> Optional[str]:
+def get_next_queued() -> Optional[dict]:
     """
-    Flags a song to be skipped and returns its status at the time of the
-    request ("queued" or "playing"), or None if the ID is unknown.
+    Returns the first queued song as a plain dict with at least "id" and "url",
+    or None if there's nothing waiting to play.
+    Includes skip_requested items so the consumer can call mark_done() on them
+    and clean them out of queue_state — otherwise they become zombie entries that
+    block re-enqueue and are never removed.
+    """
+    with _lock:
+        data = _load()
+        for item in data["items"]:
+            if item["status"] == "queued":
+                return {
+                    "id": item["id"],
+                    "url": item["url"],
+                    "title": item.get("title"),
+                    "duration": item.get("duration"),
+                }
+        return None
 
-    For a "playing" song, the caller still needs to trigger the ffplay-level
-    skip (playback.request_skip()) since that's what actually stops audio
-    that's already streaming. For a "queued" song, this flag alone is enough:
-    consumer_worker.py checks it before playing a message and, if set, marks
-    the song done and moves on without ever starting playback.
-    """
+
+def mark_skip_requested(song_id: str) -> Optional[str]:
     with _lock:
         data = _load()
         for item in data["items"]:
@@ -239,14 +286,179 @@ def is_skip_requested(song_id: str) -> bool:
 
 
 def mark_playing(song_id: str) -> None:
+    played_item = None
     with _lock:
         data = _load()
         for item in data["items"]:
             if item["id"] == song_id:
                 item["status"] = "playing"
                 item["started_at"] = time.time()
+                item["seek_offset"] = 0
+                item["paused_duration"] = 0
+                item["paused_at"] = None
+                # Record in history the moment a song starts — not when it
+                # ends — so skipped and currently-playing songs appear too.
+                _append_to_history(item)
+                played_item = dict(item)  # snapshot for analytics (below)
                 break
         _save(data)
+    # Record the play for the admin dashboard outside the lock (analytics has
+    # its own lock and does its own file I/O).
+    if played_item is not None:
+        analytics.record_play(played_item)
+
+
+def mark_paused(song_id: str) -> None:
+    """Record the timestamp at which the song was paused."""
+    with _lock:
+        data = _load()
+        for item in data["items"]:
+            if item["id"] == song_id and item.get("paused_at") is None:
+                item["paused_at"] = time.time()
+                break
+        _save(data)
+
+
+def mark_resumed(song_id: str) -> None:
+    """Accumulate how long the song was paused, then clear the paused_at marker."""
+    with _lock:
+        data = _load()
+        for item in data["items"]:
+            if item["id"] == song_id and item.get("paused_at") is not None:
+                item["paused_duration"] = (item.get("paused_duration") or 0) + (
+                    time.time() - item["paused_at"]
+                )
+                item["paused_at"] = None
+                break
+        _save(data)
+
+
+def mark_seeked(song_id: str, offset: float) -> None:
+    """
+    Record that the song was seeked to `offset` seconds. Resets the
+    playback clock so elapsed is computed from the new position.
+    """
+    with _lock:
+        data = _load()
+        for item in data["items"]:
+            if item["id"] == song_id:
+                item["seek_offset"] = offset
+                item["started_at"] = time.time()
+                item["paused_duration"] = 0
+                item["paused_at"] = None
+                break
+        _save(data)
+
+
+def _load_history() -> dict:
+    if not os.path.exists(settings.history_file):
+        return {"songs": []}
+    try:
+        with open(settings.history_file, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {"songs": []}
+
+
+def _save_history(data: dict) -> None:
+    tmp = settings.history_file + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, settings.history_file)
+
+
+def _append_to_history(item: dict) -> None:
+    """
+    Adds a song to history. If the same video already exists (matched by video
+    ID, so different URL forms of one video — ?si=, ?v=, bare — collapse to a
+    single row), the old entry is removed first so only the most recent play
+    is kept. Caps the list at 100.
+    """
+    history = _load_history()
+    url = item["url"]
+    video_id = item.get("video_id")
+    key = _video_key(url, video_id)
+    # Remove any previous entry for this video
+    history["songs"] = [
+        s for s in history["songs"]
+        if _video_key(s.get("url"), s.get("video_id")) != key
+    ]
+    history["songs"].append({
+        "url": url,
+        "video_id": video_id,
+        "title": item.get("title"),
+        "uploader": item.get("uploader"),
+        "duration": item.get("duration"),
+        "source": item.get("source"),
+        "played_at": time.time(),
+    })
+    # Keep only the last 100
+    history["songs"] = history["songs"][-100:]
+    _save_history(history)
+
+
+def get_history(page: int = 1, per_page: int = 10, q: str = "") -> dict:
+    """Returns paginated playback history, newest first. Optionally filtered by q."""
+    history = _load_history()
+    songs = list(reversed(history.get("songs", [])))
+    if q:
+        ql = q.lower()
+        songs = [s for s in songs if ql in (s.get("title") or "").lower()
+                 or ql in (s.get("uploader") or "").lower()]
+    total = len(songs)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * per_page
+    return {
+        "songs": songs[start:start + per_page],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": total_pages,
+    }
+
+
+def reorder_queue(ordered_ids: list) -> None:
+    """
+    Reorders the queued (not yet playing) songs to match ordered_ids.
+    The playing song stays in place. IDs not in the list are appended at the end.
+    """
+    with _lock:
+        data = _load()
+        items = data["items"]
+        playing = [it for it in items if it["status"] != "queued"]
+        queued = [it for it in items if it["status"] == "queued"]
+        by_id = {it["id"]: it for it in queued}
+        new_queued = [by_id[sid] for sid in ordered_ids if sid in by_id]
+        included = {sid for sid in ordered_ids if sid in by_id}
+        for it in queued:
+            if it["id"] not in included:
+                new_queued.append(it)
+        data["items"] = playing + new_queued
+        _save(data)
+
+
+def bump_to_front(song_id: str) -> bool:
+    """Moves a queued song to play next (right after the currently playing song)."""
+    with _lock:
+        data = _load()
+        items = data["items"]
+        idx = next(
+            (i for i, item in enumerate(items)
+             if item["id"] == song_id and item["status"] == "queued"),
+            None,
+        )
+        if idx is None:
+            return False
+        item = items.pop(idx)
+        # Insert at the first queued position (after any playing song)
+        insert_at = next(
+            (i for i, it in enumerate(items) if it["status"] == "queued"),
+            len(items),
+        )
+        items.insert(insert_at, item)
+        _save(data)
+        return True
 
 
 def mark_done(song_id: str) -> None:
@@ -254,6 +466,28 @@ def mark_done(song_id: str) -> None:
         data = _load()
         data["items"] = [item for item in data["items"] if item["id"] != song_id]
         _save(data)
+
+
+def reset_stale_playing() -> None:
+    """
+    On consumer startup, reset any item stuck as 'playing' back to 'queued'.
+    This happens when the consumer process crashes or is killed mid-song —
+    mark_done() never runs, so the item stays 'playing' forever and blocks
+    get_next_queued() from seeing it.
+    """
+    with _lock:
+        data = _load()
+        changed = False
+        for item in data["items"]:
+            if item["status"] == "playing":
+                item["status"] = "queued"
+                item["started_at"] = None
+                item["paused_at"] = None
+                item["paused_duration"] = 0
+                item["seek_offset"] = 0
+                changed = True
+        if changed:
+            _save(data)
 
 
 def format_duration(seconds: Optional[float]) -> str:

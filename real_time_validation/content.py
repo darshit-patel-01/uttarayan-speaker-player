@@ -1,9 +1,11 @@
 import logging
-from typing import Optional, Tuple
+from typing import Tuple
 
 import yt_dlp
 
-logger = logging.getLogger("validators")
+import runtime_config
+
+logger = logging.getLogger("real_time_validation.content")
 
 _PROBE_OPTS = {
     "quiet": True,
@@ -18,19 +20,14 @@ _PROBE_OPTS = {
 # YouTube's own review). Anything at or above this is rejected.
 MAX_ALLOWED_AGE_LIMIT = 17
 
-# Long videos (mixes, live streams, full albums) risk running past
-# max.poll.interval.ms and getting redelivered/duplicated by Kafka — see
-# consumer_worker.py. Reject anything over 2 hours up front instead.
-MAX_ALLOWED_DURATION_SECONDS = 2 * 60 * 60
 
-
-def validate_song_url(url: str, skip_content_checks: bool = False) -> Tuple[bool, str, dict]:
+def validate_song_content(url: str, skip_content_checks: bool = False) -> Tuple[bool, str, dict]:
     """
     Probes a YouTube URL's metadata (no download) and, unless
     skip_content_checks is set, checks:
       1. It is not age-restricted / mature (adult) content.
       2. It is actually a music/song video, not an arbitrary video.
-      3. It is not longer than MAX_ALLOWED_DURATION_SECONDS.
+      3. It is not longer than the configured max duration (runtime_config).
 
     skip_content_checks is for admin-submitted songs: metadata is still
     probed (duration is needed for queue/wait-time accounting), but none of
@@ -70,8 +67,9 @@ def validate_song_url(url: str, skip_content_checks: bool = False) -> Tuple[bool
     if not (is_music_category or has_track_metadata):
         return False, "Rejected: video does not appear to be a song (category is not Music)", metadata
 
+    max_duration = runtime_config.get("max_duration_seconds")
     duration = metadata.get("duration")
-    if duration is not None and duration > MAX_ALLOWED_DURATION_SECONDS:
-        return False, "Rejected: video is longer than the 2 hour limit", metadata
+    if duration is not None and duration > max_duration:
+        return False, f"Rejected: video is longer than the {max_duration // 60} minute limit", metadata
 
     return True, "", metadata

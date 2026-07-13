@@ -1,6 +1,7 @@
 # Single-node Kafka broker in KRaft mode (no Zookeeper needed), using the
-# official Apache Kafka image (apache/kafka) maintained by the ASF.
-# Run `docker compose up -d` to start it, then `docker compose down` to stop.
+# official Apache Kafka image (apache/kafka) maintained by the ASF, plus a
+# Redis instance used by real_time_validation/ for per-requester rate limits.
+# Run `docker compose up -d` to start both, then `docker compose down` to stop.
 services:
   kafka:
     image: apache/kafka:latest
@@ -19,3 +20,13 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  redis:
+    image: redis:7-alpine
+    container_name: uttarayan-redis
+    # Host port 6380, not the default 6379 — avoids silently colliding with
+    # any other Redis-compatible server already running on the host (e.g.
+    # Memurai on Windows), which would otherwise intercept the connection
+    # instead of this container. Update REDIS_PORT in .env if you change this.
+    ports:
+      - "6380:6379"

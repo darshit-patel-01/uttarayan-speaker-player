@@ -1,20 +1,34 @@
+import asyncio
 import json
 import logging
-import re
 import secrets
 from typing import List, Optional
 
 from confluent_kafka import Producer
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
+import analytics
 from config import settings
 import default_playlist
-from playback import request_skip
+import runtime_config
+from playback import (
+    get_volume, set_volume,
+    is_paused, is_stopped,
+    request_pause, request_resume, request_seek, request_skip, request_stop,
+)
 import queue_state
-from validators import validate_song_url
+from real_time_validation import (
+    blacklist,
+    detect_requester_id,
+    detect_source,
+    extract_video_id,
+    is_valid_youtube_url,
+    validate_song_request,
+)
+from real_time_validation.content import validate_song_content
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("producer_api")
@@ -22,22 +36,6 @@ logger = logging.getLogger("producer_api")
 app = FastAPI(title="YouTube Audio Queue")
 
 _producer: Optional[Producer] = None
-
-YOUTUBE_URL_RE = re.compile(
-    r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[\w-]+"
-)
-
-# Same URL shapes as YOUTUBE_URL_RE, but captures the video ID so different
-# URLs pointing at the same video (e.g. with/without a "?si=" share token)
-# can be recognized as duplicates.
-VIDEO_ID_RE = re.compile(
-    r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]+)"
-)
-
-
-def extract_video_id(url: str) -> Optional[str]:
-    match = VIDEO_ID_RE.search(url)
-    return match.group(1) if match else None
 
 
 def get_producer() -> Producer:
@@ -88,7 +86,7 @@ class EnqueueRequest(BaseModel):
         if not urls:
             raise ValueError("urls must contain at least one YouTube URL")
         for url in urls:
-            if not YOUTUBE_URL_RE.match(url):
+            if not is_valid_youtube_url(url):
                 raise ValueError(f"Not a valid YouTube URL: {url}")
         return urls
 
@@ -96,6 +94,30 @@ class EnqueueRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/history")
+def history(page: int = 1, per_page: int = 10, q: str = ""):
+    """
+    Returns paginated playback history (last 100 played songs), newest first.
+    per_page must be one of 5, 10, or 20. Optional q filters by title/uploader.
+    """
+    if per_page not in (5, 10, 20):
+        raise HTTPException(status_code=422, detail="per_page must be 5, 10, or 20")
+    result = queue_state.get_history(page=page, per_page=per_page, q=q)
+    for song in result["songs"]:
+        song["duration_fmt"] = queue_state.format_duration(song.get("duration"))
+    return result
+
+
+@app.post("/bump/{song_id}")
+def bump_song(song_id: str, admin: str = Depends(require_admin)):
+    """Moves a queued song to play next, right after the currently playing song."""
+    success = queue_state.bump_to_front(song_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"No queued song with id {song_id}")
+    logger.info("Song %s bumped to front by %s", song_id, admin)
+    return {"status": "bumped"}
 
 
 @app.get("/wait-time")
@@ -113,31 +135,67 @@ def wait_time():
     }
 
 
-def _song_summary(song: dict, source: str) -> dict:
-    return {
+import time as _time
+
+
+def _song_summary(song: dict, source: str, progress: Optional[dict] = None) -> dict:
+    result = {
+        "id": song.get("id"),
         "title": song.get("title"),
         "uploader": song.get("uploader"),
         "url": song["url"],
         "source": source,
     }
+    if progress:
+        result.update(progress)
+    return result
 
 
-@app.get("/now-playing")
-def now_playing():
+def _default_playlist_progress(np: dict) -> dict:
+    """Compute elapsed/duration/is_paused from a default-playlist now_playing entry."""
+    seek_offset = np.get("seek_offset") or 0
+    started_at = np.get("started_at") or _time.time()
+    paused_duration = np.get("paused_duration") or 0
+    paused_at = np.get("paused_at")
+    duration = np.get("duration")
+
+    elapsed = seek_offset + (_time.time() - started_at) - paused_duration
+    if paused_at:
+        elapsed -= (_time.time() - paused_at)
+    elapsed = max(0.0, elapsed)
+    if duration:
+        elapsed = min(elapsed, duration)
+
+    return {
+        "elapsed_seconds": round(elapsed, 1),
+        "duration_seconds": duration,
+        "is_paused": paused_at is not None,
+    }
+
+
+def _now_playing_payload() -> dict:
     """
     What's playing right now and what plays next, whether that's a real
-    (enqueued) song or a default-playlist fallback song. Public — this is
-    meant to be shown on the main UI for anyone to see, no login needed.
+    (enqueued) song or a default-playlist fallback song. Progress fields
+    (elapsed_seconds, duration_seconds, is_paused) are included for the
+    playing song so the UI can render a seek bar. Shared by GET
+    /now-playing and the WebSocket broadcaster below so both ways of
+    getting this data can never drift apart.
     """
     songs = queue_state.list_queue()
     playing = next((s for s in songs if s["status"] == "playing"), None)
     upcoming = [s for s in songs if s["status"] == "queued"]
 
     if playing is not None:
-        playing_summary = _song_summary(playing, "queue")
+        progress = queue_state.get_playing_progress()
+        playing_summary = _song_summary(playing, "queue", progress)
     else:
         fallback_playing = default_playlist.get_now_playing()
-        playing_summary = _song_summary(fallback_playing, "playlist") if fallback_playing else None
+        if fallback_playing:
+            progress = _default_playlist_progress(fallback_playing)
+            playing_summary = _song_summary(fallback_playing, "playlist", progress)
+        else:
+            playing_summary = None
 
     if upcoming:
         next_summary = _song_summary(upcoming[0], "queue")
@@ -148,10 +206,161 @@ def now_playing():
     return {"playing": playing_summary, "next": next_summary}
 
 
+@app.get("/now-playing")
+def now_playing():
+    """
+    Public — this is meant to be shown on the main UI for anyone to see, no
+    login needed. See WebSocket /ws/now-playing for the live-push version
+    of the same data (used by the frontend instead of polling this).
+    """
+    return _now_playing_payload()
+
+
+# ---------------------------------------------------------------------------
+# WebSocket live updates — replaces client-side polling of GET /now-playing.
+# A single background loop recomputes the payload once a second and pushes
+# it to every connected client, so song changes, skips, pauses, seeks, and
+# queue changes all show up within one second regardless of how many
+# browser tabs are watching, without each tab making its own HTTP round trip.
+# ---------------------------------------------------------------------------
+NOW_PLAYING_BROADCAST_INTERVAL_SECONDS = 1
+
+_ws_clients: set = set()
+
+
+async def _broadcast_now_playing() -> None:
+    if not _ws_clients:
+        return
+    payload = await asyncio.to_thread(_now_playing_payload)
+    message = json.dumps(payload)
+    dead = []
+    for ws in _ws_clients:
+        try:
+            await ws.send_text(message)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _ws_clients.discard(ws)
+
+
+async def _now_playing_broadcast_loop() -> None:
+    while True:
+        try:
+            await _broadcast_now_playing()
+        except Exception:
+            logger.exception("now-playing broadcast loop failed")
+        await asyncio.sleep(NOW_PLAYING_BROADCAST_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def _start_broadcast_loop() -> None:
+    asyncio.create_task(_now_playing_broadcast_loop())
+
+
+@app.websocket("/ws/now-playing")
+async def ws_now_playing(websocket: WebSocket) -> None:
+    """
+    Live-push version of GET /now-playing. Sends the current payload
+    immediately on connect, then again every
+    NOW_PLAYING_BROADCAST_INTERVAL_SECONDS for as long as the client stays
+    connected. Public, same as the GET endpoint — no admin login needed.
+    """
+    await websocket.accept()
+    _ws_clients.add(websocket)
+    try:
+        payload = await asyncio.to_thread(_now_playing_payload)
+        await websocket.send_text(json.dumps(payload))
+        while True:
+            # The client never sends anything; this just blocks until the
+            # connection closes so we notice disconnects promptly.
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _ws_clients.discard(websocket)
+
+
 @app.post("/login")
 def login(admin: str = Depends(require_admin)):
     """Validates admin credentials. Returns 401 (via require_admin) if they're wrong."""
     return {"status": "ok", "username": admin}
+
+
+@app.get("/volume")
+def volume_get(admin: str = Depends(require_admin)):
+    """Returns the current volume as a 0–100 integer percentage."""
+    return {"volume": round(get_volume() * 100)}
+
+
+class VolumeRequest(BaseModel):
+    volume: int  # 0–100
+
+    @field_validator("volume")
+    @classmethod
+    def validate_volume(cls, v: int) -> int:
+        if not (0 <= v <= 100):
+            raise ValueError("volume must be between 0 and 100")
+        return v
+
+
+@app.post("/volume")
+def volume_set(req: VolumeRequest, admin: str = Depends(require_admin)):
+    """Sets playback volume (0–100%). Takes effect within ~200 ms without stopping the song."""
+    level = req.volume / 100.0
+    set_volume(level)
+    logger.info("Volume set to %d%% by %s", req.volume, admin)
+    return {"volume": req.volume}
+
+
+@app.post("/pause")
+def pause(admin: str = Depends(require_admin)):
+    """Pauses the currently playing track."""
+    request_pause()
+    logger.info("Pause requested via API by %s", admin)
+    return {"status": "paused"}
+
+
+@app.post("/resume")
+def resume(admin: str = Depends(require_admin)):
+    """Resumes a paused or stopped track."""
+    request_resume()  # clears both pause and stop signals
+    logger.info("Resume requested via API by %s", admin)
+    return {"status": "resumed"}
+
+
+@app.post("/stop")
+def stop(admin: str = Depends(require_admin)):
+    """
+    Stops all playback immediately and blocks the consumer from auto-advancing
+    to the next song. POST /resume to start playing again.
+    """
+    request_stop()
+    request_skip()   # kills the currently playing song
+    logger.info("Stop requested via API by %s", admin)
+    return {"status": "stopped"}
+
+
+class SeekRequest(BaseModel):
+    seconds: float
+
+
+@app.post("/seek")
+def seek(req: SeekRequest, admin: str = Depends(require_admin)):
+    """
+    Seeks to `seconds` into the currently playing track. The track restarts
+    playback from that position. Clears any pause state (seek always plays).
+    """
+    if req.seconds < 0:
+        raise HTTPException(status_code=422, detail="seconds must be >= 0")
+    request_seek(req.seconds)
+    logger.info("Seek to %.1fs requested via API by %s", req.seconds, admin)
+    return {"status": "seek requested", "seconds": req.seconds}
+
+
+@app.get("/playback-status")
+def playback_status(admin: str = Depends(require_admin)):
+    """Returns the current paused/stopped state."""
+    return {"paused": is_paused(), "stopped": is_stopped()}
 
 
 @app.post("/skip")
@@ -184,6 +393,18 @@ def skip_song(song_id: str, admin: str = Depends(require_admin)):
     return {"status": "skip requested", "song_status": song_status}
 
 
+class ReorderQueueRequest(BaseModel):
+    song_ids: List[str]
+
+
+@app.put("/queue/reorder")
+def reorder_queue_endpoint(req: ReorderQueueRequest, admin: str = Depends(require_admin)):
+    """Reorders the queued songs (not the currently playing one) to the given order."""
+    queue_state.reorder_queue(req.song_ids)
+    logger.info("Queue reordered by %s", admin)
+    return {"status": "reordered"}
+
+
 @app.get("/queue")
 def queue(admin: str = Depends(require_admin)):
     """Lists every song currently queued, in play order, with position and estimated wait."""
@@ -192,6 +413,159 @@ def queue(admin: str = Depends(require_admin)):
         song["duration"] = queue_state.format_duration(song["duration_seconds"])
         song["estimated_wait"] = queue_state.format_duration(song["estimated_wait_seconds"])
     return {"queue": songs}
+
+
+# ---------------------------------------------------------------------------
+# Blacklist (admin-only) — banned video IDs and banned requesters (phone
+# numbers / Telegram ids / IPs). Enforced first in real_time_validation for
+# every non-admin enqueue, regardless of source (web / WhatsApp / Telegram).
+# ---------------------------------------------------------------------------
+BLACKLIST_SOURCES = ("whatsapp", "telegram", "ip")
+
+
+class BlacklistVideoRequest(BaseModel):
+    # Accepts either a bare video ID or a full YouTube URL (normalized below).
+    video_id: str
+
+    @field_validator("video_id")
+    @classmethod
+    def normalize(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("video_id must not be empty")
+        return extract_video_id(value) or value
+
+
+class BlacklistRequesterRequest(BaseModel):
+    source: str   # "whatsapp" | "telegram" | "ip"
+    value: str    # phone number / Telegram user id / IP address
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, source: str) -> str:
+        source = source.strip().lower()
+        if source not in BLACKLIST_SOURCES:
+            raise ValueError(f"source must be one of {', '.join(BLACKLIST_SOURCES)}")
+        return source
+
+    @field_validator("value")
+    @classmethod
+    def validate_value(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must not be empty")
+        return value
+
+    def requester_key(self) -> str:
+        return f"{self.source}:{self.value}"
+
+
+def _split_requester_key(key: str) -> dict:
+    """Splits a stored 'source:value' key back into parts for the UI."""
+    source, _, value = key.partition(":")
+    return {"key": key, "source": source, "value": value}
+
+
+@app.get("/blacklist")
+def get_blacklist(admin: str = Depends(require_admin)):
+    """Returns the current blacklist: banned video IDs and requesters."""
+    data = blacklist.list_all()
+    return {
+        "video_ids": data["video_ids"],
+        "requesters": [_split_requester_key(k) for k in data["requesters"]],
+    }
+
+
+@app.post("/blacklist/video")
+def blacklist_add_video(req: BlacklistVideoRequest, admin: str = Depends(require_admin)):
+    """Bans a YouTube video ID from being enqueued by non-admins."""
+    added = blacklist.add_video(req.video_id)
+    logger.info("Blacklist: video %s %s by %s", req.video_id, "added" if added else "already present", admin)
+    return {"status": "added" if added else "already_present", "video_id": req.video_id}
+
+
+@app.delete("/blacklist/video/{video_id}")
+def blacklist_remove_video(video_id: str, admin: str = Depends(require_admin)):
+    """Un-bans a previously blacklisted video ID."""
+    removed = blacklist.remove_video(video_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Video {video_id} is not blacklisted")
+    logger.info("Blacklist: video %s removed by %s", video_id, admin)
+    return {"status": "removed", "video_id": video_id}
+
+
+@app.post("/blacklist/requester")
+def blacklist_add_requester(req: BlacklistRequesterRequest, admin: str = Depends(require_admin)):
+    """Bans a requester (phone number / Telegram id / IP) from enqueueing."""
+    key = req.requester_key()
+    added = blacklist.add_requester(key)
+    logger.info("Blacklist: requester %s %s by %s", key, "added" if added else "already present", admin)
+    return {"status": "added" if added else "already_present", "requester": _split_requester_key(key)}
+
+
+@app.delete("/blacklist/requester")
+def blacklist_remove_requester(source: str, value: str, admin: str = Depends(require_admin)):
+    """Un-bans a requester. Pass the same source + value used to add it."""
+    key = f"{source.strip().lower()}:{value.strip()}"
+    removed = blacklist.remove_requester(key)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Requester {key} is not blacklisted")
+    logger.info("Blacklist: requester %s removed by %s", key, admin)
+    return {"status": "removed", "requester": _split_requester_key(key)}
+
+
+# ---------------------------------------------------------------------------
+# Admin dashboard stats — aggregated from the append-only analytics log
+# (one event per real-queue song that started playing). Default-playlist
+# songs are excluded (they aren't anyone's request).
+# ---------------------------------------------------------------------------
+@app.get("/stats")
+def stats(admin: str = Depends(require_admin)):
+    """
+    Dashboard numbers: total plays + playtime, playtime/plays grouped by
+    source (whatsapp / telegram / web), the top requesters, and the
+    most-requested songs. Durations are also returned pre-formatted.
+    """
+    data = analytics.get_stats()
+    data["total_playtime"] = queue_state.format_duration(data["total_playtime_seconds"])
+    for row in data["by_source"]:
+        row["playtime"] = queue_state.format_duration(row["playtime_seconds"])
+    for row in data["top_requesters"]:
+        row["playtime"] = queue_state.format_duration(row["playtime_seconds"])
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Runtime config (admin-only) — tunable settings (rate limit, queue-wait cap,
+# max duration, normalization, crossfade) that both the API and consumer read
+# live, so changes take effect without a restart. See runtime_config.py.
+# ---------------------------------------------------------------------------
+class ConfigUpdateRequest(BaseModel):
+    changes: dict
+
+
+@app.get("/config")
+def get_config(admin: str = Depends(require_admin)):
+    """Every tunable setting with its current value, default, and UI metadata."""
+    return {"settings": runtime_config.get_all()}
+
+
+@app.put("/config")
+def update_config(req: ConfigUpdateRequest, admin: str = Depends(require_admin)):
+    """Apply a batch of setting changes. 422 on an unknown key / out-of-range value."""
+    try:
+        updated = runtime_config.update(req.changes)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    logger.info("Config updated by %s: %s", admin, req.changes)
+    return {"settings": updated}
+
+
+@app.post("/config/reset")
+def reset_config(admin: str = Depends(require_admin)):
+    """Clear all overrides — every setting falls back to its .env default."""
+    logger.info("Config reset to defaults by %s", admin)
+    return {"settings": runtime_config.reset()}
 
 
 class CreatePlaylistRequest(BaseModel):
@@ -273,7 +647,7 @@ def add_playlist_songs(playlist_id: str, req: EnqueueRequest, admin: str = Depen
     added = []
     rejected = []
     for url in req.urls:
-        is_valid, reason, metadata = validate_song_url(url, skip_content_checks=True)
+        is_valid, reason, metadata = validate_song_content(url, skip_content_checks=True)
         if not is_valid:
             rejected.append({"url": url, "reason": reason})
             continue
@@ -282,6 +656,9 @@ def add_playlist_songs(playlist_id: str, req: EnqueueRequest, admin: str = Depen
         )
         if item is None:
             raise HTTPException(status_code=404, detail=f"No playlist with id {playlist_id}")
+        if item.get("duplicate"):
+            rejected.append({"url": url, "reason": "Song already in this playlist"})
+            continue
         item["duration"] = queue_state.format_duration(item.get("duration"))
         added.append(item)
 
@@ -289,6 +666,20 @@ def add_playlist_songs(playlist_id: str, req: EnqueueRequest, admin: str = Depen
         "Playlist %s: added %d, rejected %d (by %s)", playlist_id, len(added), len(rejected), admin
     )
     return {"added": added, "rejected": rejected}
+
+
+class ReorderSongsRequest(BaseModel):
+    song_ids: List[str]
+
+
+@app.put("/playlists/{playlist_id}/songs/reorder")
+def reorder_playlist_songs(playlist_id: str, req: ReorderSongsRequest, admin: str = Depends(require_admin)):
+    """Reorders a playlist's songs to match the provided ordered list of song IDs."""
+    success = default_playlist.reorder_songs(playlist_id, req.song_ids)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"No playlist with id {playlist_id}")
+    logger.info("Playlist %s: reordered songs (by %s)", playlist_id, admin)
+    return {"status": "reordered"}
 
 
 @app.delete("/playlists/{playlist_id}/songs/{song_id}")
@@ -316,13 +707,13 @@ def status(song_id: str):
 
 
 @app.post("/enqueue")
-def enqueue(req: EnqueueRequest, admin: Optional[str] = Depends(optional_admin)):
+def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depends(optional_admin)):
     """
-    Accepts one or more YouTube URLs. Each is probed and only pushed onto the
-    Kafka queue if it passes validation:
-      - not age-restricted / adult content
-      - actually a music/song video
-      - under the 2 hour duration limit
+    Accepts one or more YouTube URLs. Each is run through
+    real_time_validation.validate_song_request() and only pushed onto the
+    Kafka queue if it passes: not already queued, within the requester's
+    rate limit, not age-restricted, actually a music video, and under the
+    duration limit.
 
     URLs that fail validation are skipped and reported back in "rejected"
     instead of failing the whole request. Each accepted song gets an
@@ -336,31 +727,28 @@ def enqueue(req: EnqueueRequest, admin: Optional[str] = Depends(optional_admin))
     enqueued = []
     rejected = []
     delivery_failures = []  # keyed by song_id
+    is_admin = admin is not None
+    source = detect_source(request)
+    requester_id = detect_requester_id(request, source)
 
     def _on_delivery(err, msg, song_id, url):
         if err is not None:
             delivery_failures.append({"id": song_id, "url": url, "reason": f"Kafka delivery failed: {err}"})
 
     for url in req.urls:
-        video_id = extract_video_id(url)
-        duplicate = queue_state.find_by_video_id(video_id) if video_id else None
-        if duplicate is not None:
-            wait_str = queue_state.format_duration(duplicate["estimated_wait_seconds"])
-            rejected.append(
-                {"url": url, "reason": f"Your requested song is already in queue, will play after {wait_str}"}
-            )
+        result = validate_song_request(url, requester_id=requester_id, is_admin=is_admin)
+        if not result.is_valid:
+            rejected.append({"url": url, "reason": result.reason})
             continue
 
-        is_valid, reason, metadata = validate_song_url(url, skip_content_checks=admin is not None)
-        if not is_valid:
-            rejected.append({"url": url, "reason": reason})
-            continue
+        duration = result.metadata.get("duration")
+        title = result.metadata.get("title")
+        uploader = result.metadata.get("uploader")
 
-        duration = metadata.get("duration")
-        title = metadata.get("title")
-        uploader = metadata.get("uploader")
-
-        song_id, position, wait_seconds = queue_state.add_song(url, duration, title, uploader, video_id)
+        song_id, position, wait_seconds = queue_state.add_song(
+            url, duration, title, uploader, result.video_id,
+            source=source, requester_id=requester_id,
+        )
 
         try:
             producer.produce(
@@ -375,6 +763,7 @@ def enqueue(req: EnqueueRequest, admin: Optional[str] = Depends(optional_admin))
                     "url": url,
                     "title": title,
                     "uploader": uploader,
+                    "source": source,
                     "position_in_queue": position,
                     "duration_seconds": duration,
                     "duration": queue_state.format_duration(duration),

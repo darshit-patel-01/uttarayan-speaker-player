@@ -8,4 +8,7 @@ __pycache__
 venv
 .default_playlist.json
 .queue_state.json
+.blacklist.json
+.analytics.json
+.runtime_config.json
 .env

@@ -17,7 +17,8 @@ try {
   // .env is optional — ENQUEUE_URL falls back to localhost below.
 }
 
-const ENQUEUE_URL = process.env.ENQUEUE_URL || "http://localhost:8000/enqueue";
+const BASE_URL = (process.env.ENQUEUE_URL || "http://localhost:8000/enqueue").replace(/\/enqueue$/, "");
+const ENQUEUE_URL = `${BASE_URL}/enqueue`;
 
 // Single audit log: who (phone number) requested what (song URL) and what
 // happened to it (queued / rejected / errored). One line per event, always
@@ -47,6 +48,39 @@ const ADMIN_PHONE_NUMBERS = (process.env.ADMIN_PHONE_NUMBERS || "")
   .split(",")
   .map((n) => n.replace(/\D/g, ""))
   .filter(Boolean);
+
+// Pending play notifications: song_id -> { jid, title }
+const pendingNotifications = new Map();
+
+// Status command: reply with now-playing + queue info
+const STATUS_COMMAND_RE = /^\s*(status|queue|wait)\s*$/i;
+
+async function handleStatusCommand() {
+  try {
+    const [npRes, waitRes] = await Promise.all([
+      fetch(`${BASE_URL}/now-playing`),
+      fetch(`${BASE_URL}/wait-time`),
+    ]);
+    const np = await npRes.json();
+    const wait = await waitRes.json();
+    const lines = [];
+    if (np.playing) {
+      lines.push(`🎵 Now playing: ${np.playing.title || np.playing.url}`);
+      if (np.playing.uploader) lines.push(`   by ${np.playing.uploader}`);
+    } else {
+      lines.push("🔇 Nothing playing right now.");
+    }
+    if (np.next) lines.push(`⏭ Up next: ${np.next.title || np.next.url}`);
+    lines.push(
+      wait.queue_length > 0
+        ? `⏳ ${wait.queue_length} song(s) in queue — ~${wait.estimated_wait} wait`
+        : "📭 Queue is empty — your song would start right away!"
+    );
+    return lines.join("\n");
+  } catch (err) {
+    return `Couldn't reach the queue: ${err.message}`;
+  }
+}
 
 // Same URL shapes producer_api.py accepts, so anything we forward is
 // guaranteed to at least pass the "is this a YouTube URL" shape check.
@@ -94,8 +128,11 @@ async function senderPhoneNumber(sock, msg) {
   return digitsOnly(jid);
 }
 
-async function enqueueUrls(urls, { asAdmin = false } = {}) {
-  const headers = { "Content-Type": "application/json" };
+async function enqueueUrls(urls, { asAdmin = false, requesterId } = {}) {
+  const headers = { "Content-Type": "application/json", "X-Source": "whatsapp" };
+  if (requesterId) {
+    headers["X-Requester-Id"] = requesterId;
+  }
   if (asAdmin) {
     if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
       throw new Error(
@@ -171,6 +208,24 @@ async function start() {
     }
   });
 
+  // Poll every 5s to notify requesters when their song starts playing
+  setInterval(async () => {
+    if (pendingNotifications.size === 0) return;
+    try {
+      const res = await fetch(`${BASE_URL}/now-playing`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const playingId = data.playing?.id;
+      if (playingId && pendingNotifications.has(playingId)) {
+        const { jid: notifyJid, title } = pendingNotifications.get(playingId);
+        pendingNotifications.delete(playingId);
+        await sock.sendMessage(notifyJid, {
+          text: `🎵 Your song is playing now!\n${title}`,
+        });
+      }
+    } catch (_) {}
+  }, 5000);
+
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
 
@@ -180,6 +235,13 @@ async function start() {
       const jid = msg.key.remoteJid;
       const text =
         msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+
+      // Status commands: "status", "queue", "wait"
+      if (STATUS_COMMAND_RE.test(text)) {
+        const reply = await handleStatusCommand();
+        await sock.sendMessage(jid, { text: reply });
+        continue;
+      }
 
       const urls = extractYoutubeUrls(text);
       if (urls.length === 0) continue; // silently ignore messages with no "play <link>"
@@ -192,13 +254,17 @@ async function start() {
       }
 
       try {
-        const data = await enqueueUrls(urls, { asAdmin });
+        const data = await enqueueUrls(urls, { asAdmin, requesterId: number });
 
         for (const song of data.enqueued || []) {
           await logLine(
             `RESULT queued phone=${number} admin=${asAdmin} url=${song.url} ` +
               `title="${song.title || ""}" position=${song.position_in_queue}`
           );
+          // Register for a "now playing" notification
+          if (song.id) {
+            pendingNotifications.set(song.id, { jid, title: song.title || song.url });
+          }
         }
         for (const rej of data.rejected || []) {
           await logLine(

@@ -1,0 +1,13 @@
+{
+  "name": "telegram-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Watches a Telegram bot for YouTube links and forwards them to the ytplayer /enqueue endpoint.",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^1.1.2"
+  }
+}

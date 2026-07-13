@@ -52,7 +52,7 @@
   button:disabled { background: #999; box-shadow: none; cursor: default; }
   button.small { padding: 4px 10px; font-size: 0.8rem; }
   button.secondary { background: var(--kite-purple); }
-  #result, #login-result, #skip-result {
+  #result, #login-result, #skip-result, #status-result {
     margin-top: 12px;
     padding: 12px 14px;
     border-radius: 6px;
@@ -98,6 +98,56 @@
   .np-row { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
   .np-row + .np-row { margin-top: 6px; }
   .np-label { font-weight: 600; color: var(--kite-purple); white-space: nowrap; }
+
+  /* Admin playback controls */
+  #np-admin-controls { display: none; margin-top: 10px; margin-bottom: 8px; }
+  #np-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  #np-seek-bar {
+    flex: 1;
+    height: 6px;
+    accent-color: var(--kite-orange);
+    cursor: pointer;
+  }
+  .np-time { font-size: 0.78rem; color: #555; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #np-ctrl-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .np-ctrl-btn {
+    padding: 6px 12px;
+    font-size: 0.82rem;
+    border: none;
+    border-radius: 6px;
+    background: linear-gradient(135deg, var(--kite-orange), var(--kite-pink));
+    color: white;
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+    white-space: nowrap;
+  }
+  .np-ctrl-btn.secondary { background: var(--kite-purple); }
+  .np-ctrl-btn.danger { background: #c62828; }
+  .np-ctrl-btn:disabled { background: #bbb; box-shadow: none; cursor: default; }
+  #np-volume-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  #np-volume-bar {
+    flex: 1;
+    max-width: 160px;
+    height: 6px;
+    accent-color: var(--kite-green);
+    cursor: pointer;
+  }
+  .np-vol-label { font-size: 0.78rem; color: #555; white-space: nowrap; }
   .np-source { color: #888; font-size: 0.8em; }
   .np-playing-indicator {
     display: inline-flex;
@@ -182,6 +232,9 @@
   th { color: #666; font-weight: 600; }
   a { color: var(--kite-pink); }
   #queue-empty { color: #888; font-size: 0.9rem; display: none; }
+  .history-enqueue-result { font-size: 0.78rem; margin-top: 3px; }
+  .history-enqueue-result.ok { color: #1b5e20; }
+  .history-enqueue-result.err { color: #b71c1c; }
   dialog {
     border: none;
     border-radius: 8px;
@@ -193,8 +246,14 @@
   dialog::backdrop { background: rgba(0,0,0,0.4); }
   dialog h1 { margin: 0 0 12px; }
   dialog form { flex-direction: column; }
-  #manage-playlist-modal { width: 560px; }
+  #manage-playlist-modal { width: min(560px, 96vw); }
   #manage-playlist-add-form { flex-direction: row; }
+
+  .drag-handle { cursor: grab; color: #bbb; font-size: 1.1rem; user-select: none; padding: 8px 6px 8px 10px; }
+  .drag-handle:active { cursor: grabbing; }
+  #manage-playlist-body tr { transition: opacity 0.1s; }
+  #manage-playlist-body tr.dragging { opacity: 0.4; }
+  #manage-playlist-body tr.drag-over { outline: 2px dashed var(--kite-purple); background: #f0eaf9; }
 
   .tab-nav {
     display: flex;
@@ -222,6 +281,47 @@
   }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
+
+  .stat-card {
+    flex: 1;
+    min-width: 140px;
+    padding: 16px;
+    border: 2px solid var(--kite-orange);
+    border-radius: 10px;
+    text-align: center;
+    background: rgba(255, 153, 51, 0.06);
+  }
+  .stat-value {
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: var(--kite-pink);
+    line-height: 1.1;
+  }
+  .stat-label {
+    font-size: 0.8rem;
+    color: #888;
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .setting-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid #eee;
+    flex-wrap: wrap;
+  }
+  .setting-info { flex: 1; min-width: 200px; }
+  .setting-label { font-weight: 600; }
+  .setting-label .setting-default { font-weight: 400; color: #aaa; font-size: 0.82rem; margin-left: 6px; }
+  .setting-help { font-size: 0.82rem; color: #888; margin-top: 2px; }
+  .setting-control { display: flex; align-items: center; gap: 6px; }
+  .setting-control input[type="number"] { width: 110px; }
+  .setting-control .setting-unit { color: #888; font-size: 0.85rem; }
+  @media (prefers-color-scheme: dark) { .setting-row { border-bottom-color: #333; } }
 
   #about-section {
     margin-top: 40px;
@@ -283,6 +383,9 @@
   .kite-decor svg { position: absolute; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15)); }
 
   @media (max-width: 640px) {
+    #np-ctrl-row { gap: 4px; }
+    .np-ctrl-btn { padding: 5px 8px; font-size: 0.75rem; }
+
     body { margin: 24px auto 40px; padding: 0 12px 40px; }
     .site-header { flex-wrap: wrap; margin-bottom: 16px; padding-right: 54px; }
     .site-header h1 { font-size: 1.2rem; }
@@ -368,6 +471,28 @@
       <span class="np-label">▶ Now playing:</span>
       <span id="np-playing-text">Loading…</span>
     </div>
+
+    <!-- Admin-only playback controls (shown after login) -->
+    <div id="np-admin-controls">
+      <div id="np-progress-row">
+        <span class="np-time" id="np-elapsed">0:00</span>
+        <input type="range" id="np-seek-bar" min="0" max="100" value="0" step="1">
+        <span class="np-time" id="np-duration">0:00</span>
+      </div>
+      <div id="np-ctrl-row">
+        <button class="np-ctrl-btn secondary" id="np-backward-btn" title="Rewind 10s">⏮ −10s</button>
+        <button class="np-ctrl-btn" id="np-pause-resume-btn">⏸ Pause</button>
+        <button class="np-ctrl-btn secondary" id="np-skip-now-btn">⏭ Skip</button>
+        <button class="np-ctrl-btn secondary" id="np-forward-btn" title="Forward 10s">+10s ⏭</button>
+      </div>
+      <div id="np-volume-row">
+        <span class="np-vol-label">🔇</span>
+        <input type="range" id="np-volume-bar" min="0" max="100" value="100" step="1">
+        <span class="np-vol-label">🔊</span>
+        <span class="np-vol-label" id="np-volume-pct">100%</span>
+      </div>
+    </div>
+
     <div class="np-row">
       <span class="np-label">⏭ Up next:</span>
       <span id="np-next-text">Loading…</span>
@@ -394,10 +519,13 @@
   </div>
 
   <nav class="tab-nav">
-    <button type="button" class="tab-btn" data-tab="enqueue">Enqueuing Song</button>
-    <button type="button" class="tab-btn" data-tab="wait">Wait Time of Song</button>
+    <button type="button" class="tab-btn" data-tab="enqueue">Enqueue Song</button>
+    <button type="button" class="tab-btn" data-tab="history">History</button>
+    <button type="button" class="tab-btn admin-only" id="tab-btn-dashboard" data-tab="dashboard">Dashboard</button>
     <button type="button" class="tab-btn admin-only" id="tab-btn-queue" data-tab="queue">Queue</button>
     <button type="button" class="tab-btn admin-only" id="tab-btn-playlists" data-tab="playlists">Manage Playlist</button>
+    <button type="button" class="tab-btn admin-only" id="tab-btn-blacklist" data-tab="blacklist">Blacklist</button>
+    <button type="button" class="tab-btn admin-only" id="tab-btn-settings" data-tab="settings">Settings</button>
   </nav>
 
   <div class="tab-panel" data-tab="enqueue">
@@ -409,12 +537,93 @@
     <div id="result"></div>
   </div>
 
-  <div class="tab-panel" data-tab="wait">
-    <form id="status-form">
-      <input type="text" id="song-id" placeholder="Song ID (from the enqueue result)" required>
-      <button type="submit" id="status-btn">Check</button>
-    </form>
-    <div id="status-result"></div>
+  <div class="tab-panel" data-tab="history">
+    <div id="history-section">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+        <h1 style="margin:0; font-size:1.1rem;">Play History</h1>
+        <input type="search" id="history-search" placeholder="🔍 Search…"
+          style="padding:4px 8px; border:1px solid #ccc; border-radius:4px; font-size:0.85rem; flex:1; min-width:100px; max-width:200px;">
+        <label style="font-size:0.85rem; color:#555;">
+          Per page:
+          <select id="history-per-page" style="margin-left:4px; padding:3px 6px; border-radius:4px; border:1px solid #ccc; font-size:0.85rem;">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+          </select>
+        </label>
+        <button type="button" id="history-refresh-btn" class="small secondary">Refresh</button>
+      </div>
+      <div id="history-wrap" style="overflow-x:auto;">
+        <table id="history-table" style="display:none; width:100%; border-collapse:collapse; font-size:0.85rem;">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Title</th>
+              <th>Duration</th>
+              <th>Played at</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+        <div id="history-empty" style="color:#888; font-size:0.9rem; display:none;">No songs played yet.</div>
+        <div id="history-loading" style="color:#888; font-size:0.9rem;">Loading…</div>
+      </div>
+      <div id="history-pagination" style="display:none; margin-top:12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <button type="button" id="history-prev-btn" class="small secondary">← Prev</button>
+        <span id="history-page-info" style="font-size:0.85rem; color:#555;"></span>
+        <button type="button" id="history-next-btn" class="small secondary">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-panel" data-tab="dashboard">
+    <div id="dashboard-section">
+      <h1>Dashboard</h1>
+      <p style="color:#888; font-size:0.85rem; margin-top:-16px;">
+        Stats for songs that actually played from the request queue (default-playlist songs aren't counted).
+      </p>
+      <button type="button" id="refresh-dashboard-btn">Refresh</button>
+      <div id="dashboard-result"></div>
+
+      <div id="dashboard-cards" style="display:flex; gap:12px; flex-wrap:wrap; margin:16px 0;">
+        <div class="stat-card">
+          <div class="stat-value" id="stat-total-plays">–</div>
+          <div class="stat-label">Songs played</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="stat-total-playtime">–</div>
+          <div class="stat-label">Total playtime</div>
+        </div>
+      </div>
+
+      <h2 style="margin-top:20px;">Playtime by source</h2>
+      <div style="overflow-x:auto;">
+        <table id="dashboard-source-table" style="display:none;">
+          <thead><tr><th>Source</th><th>Songs</th><th>Playtime</th></tr></thead>
+          <tbody id="dashboard-source-body"></tbody>
+        </table>
+        <div id="dashboard-source-empty" style="color:#888; font-size:0.9rem;">No plays yet.</div>
+      </div>
+
+      <h2 style="margin-top:24px;">Top requesters</h2>
+      <div style="overflow-x:auto;">
+        <table id="dashboard-requesters-table" style="display:none;">
+          <thead><tr><th>#</th><th>Source</th><th>Requester</th><th>Songs</th><th>Playtime</th></tr></thead>
+          <tbody id="dashboard-requesters-body"></tbody>
+        </table>
+        <div id="dashboard-requesters-empty" style="color:#888; font-size:0.9rem;">No requests yet.</div>
+      </div>
+
+      <h2 style="margin-top:24px;">Most-requested songs</h2>
+      <div style="overflow-x:auto;">
+        <table id="dashboard-songs-table" style="display:none;">
+          <thead><tr><th>#</th><th>Title</th><th>Times played</th></tr></thead>
+          <tbody id="dashboard-songs-body"></tbody>
+        </table>
+        <div id="dashboard-songs-empty" style="color:#888; font-size:0.9rem;">No songs played yet.</div>
+      </div>
+    </div>
   </div>
 
   <div class="tab-panel" data-tab="queue">
@@ -427,12 +636,8 @@
         <table id="queue-table" style="display: none;">
           <thead>
             <tr>
-              <th>#</th>
-              <th>ID</th>
+              <th></th>
               <th>Title</th>
-              <th>Uploader</th>
-              <th>URL</th>
-              <th>Status</th>
               <th>Duration</th>
               <th>Est. wait</th>
               <th></th>
@@ -470,6 +675,64 @@
     </div>
   </div>
 
+  <div class="tab-panel" data-tab="blacklist">
+    <div id="blacklist-section">
+      <h1>Blacklist</h1>
+      <p style="color:#888; font-size:0.85rem; margin-top:-16px;">
+        Blocked videos and requesters are refused for everyone except admins, across web, WhatsApp, and Telegram.
+      </p>
+      <div id="blacklist-result"></div>
+
+      <h2 style="margin-top:20px;">Blocked videos</h2>
+      <form id="blacklist-video-form" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+        <input type="text" id="blacklist-video-input" placeholder="YouTube URL or video ID" style="flex:1; min-width:220px;" required>
+        <button type="submit">Block video</button>
+      </form>
+      <div id="blacklist-videos-wrap" style="overflow-x:auto;">
+        <table id="blacklist-videos-table" style="display:none;">
+          <thead><tr><th>Video ID</th><th></th></tr></thead>
+          <tbody id="blacklist-videos-body"></tbody>
+        </table>
+        <div id="blacklist-videos-empty" style="color:#888; font-size:0.9rem;">No blocked videos.</div>
+      </div>
+
+      <h2 style="margin-top:24px;">Blocked requesters</h2>
+      <form id="blacklist-requester-form" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+        <select id="blacklist-requester-source">
+          <option value="whatsapp">WhatsApp (phone)</option>
+          <option value="telegram">Telegram (user id)</option>
+          <option value="ip">Web (IP address)</option>
+        </select>
+        <input type="text" id="blacklist-requester-input" placeholder="Phone number / Telegram id / IP" style="flex:1; min-width:200px;" required>
+        <button type="submit">Block requester</button>
+      </form>
+      <div id="blacklist-requesters-wrap" style="overflow-x:auto;">
+        <table id="blacklist-requesters-table" style="display:none;">
+          <thead><tr><th>Type</th><th>Value</th><th></th></tr></thead>
+          <tbody id="blacklist-requesters-body"></tbody>
+        </table>
+        <div id="blacklist-requesters-empty" style="color:#888; font-size:0.9rem;">No blocked requesters.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-panel" data-tab="settings">
+    <div id="settings-section">
+      <h1>Settings</h1>
+      <p style="color:#888; font-size:0.85rem; margin-top:-16px;">
+        Live tuning — changes take effect on the next request / next song, no restart needed. Blank overrides fall back to the <code>.env</code> default.
+      </p>
+      <div id="settings-result"></div>
+      <form id="settings-form">
+        <div id="settings-fields"></div>
+        <div style="display:flex; gap:8px; margin-top:16px; flex-wrap:wrap;">
+          <button type="submit" id="settings-save-btn">Save changes</button>
+          <button type="button" id="settings-reset-btn" class="secondary">Reset all to defaults</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <dialog id="new-playlist-modal">
     <form id="new-playlist-form">
       <h1 style="margin-bottom:12px;">New playlist</h1>
@@ -488,15 +751,13 @@
       <button type="submit" id="manage-playlist-add-btn">Add</button>
     </form>
     <div id="manage-playlist-result"></div>
-    <div id="manage-playlist-wrap" style="overflow-x:auto; max-height:280px; overflow-y:auto;">
+    <div id="manage-playlist-wrap" style="max-height:320px; overflow-y:auto;">
       <table id="manage-playlist-table" style="display: none;">
         <thead>
           <tr>
-            <th>#</th>
+            <th></th>
             <th>Title</th>
-            <th>Uploader</th>
-            <th>URL</th>
-            <th>Duration</th>
+            <th>Dur.</th>
             <th></th>
           </tr>
         </thead>
@@ -539,6 +800,29 @@
 </footer>
 
 <script>
+const WA_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="#25D366" style="vertical-align:middle;margin-right:3px;flex-shrink:0"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>`;
+
+function sourceIconHtml(source) {
+  if (source === 'whatsapp') return WA_SVG;
+  if (source === 'web') return '🌐';
+  if (source === 'api') return '🔧';
+  return '';
+}
+
+function makeSourceCell(source) {
+  const td = document.createElement('td');
+  if (source === 'whatsapp') {
+    td.innerHTML = WA_SVG + 'WhatsApp';
+  } else if (source === 'web') {
+    td.textContent = '🌐 Web';
+  } else if (source === 'api') {
+    td.textContent = '🔧 API';
+  } else {
+    td.textContent = source || '—';
+  }
+  return td;
+}
+
 function formatError(data) {
   if (typeof data.detail === 'string') return data.detail;
   if (Array.isArray(data.detail)) {
@@ -562,6 +846,16 @@ tabButtons.forEach(btn => btn.addEventListener('click', () => switchTab(btn.data
 switchTab('enqueue');
 
 // --- Now playing / up next (public, always visible) ----------------------
+
+// Local state for admin progress tracking
+let npState = { elapsed: 0, duration: 0, isPaused: false, isStopped: false, hasPlaying: false };
+let seekBarDragging = false;
+
+function formatTime(secs) {
+  secs = Math.max(0, Math.round(secs || 0));
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 function renderNowPlayingRow(containerId, song, emptyText, showIndicator) {
   const container = document.getElementById(containerId);
@@ -601,12 +895,63 @@ function renderNowPlayingRow(containerId, song, emptyText, showIndicator) {
   }
 }
 
+function updateAdminProgressUI() {
+  if (!sessionStorage.getItem(AUTH_STORAGE_KEY)) return;
+  const elapsed = npState.elapsed;
+  const duration = npState.duration || 0;
+  const bar = document.getElementById('np-seek-bar');
+  const elapsedEl = document.getElementById('np-elapsed');
+  const durationEl = document.getElementById('np-duration');
+  const pauseBtn = document.getElementById('np-pause-resume-btn');
+
+  elapsedEl.textContent = formatTime(elapsed);
+  durationEl.textContent = duration ? formatTime(duration) : '--:--';
+
+  if (!seekBarDragging) {
+    bar.max = duration || 100;
+    bar.value = elapsed;
+    bar.disabled = !npState.hasPlaying || !duration;
+  }
+
+  // Pause/Resume button label
+  if (npState.isStopped) {
+    pauseBtn.textContent = '▶ Resume';
+  } else if (npState.isPaused) {
+    pauseBtn.textContent = '▶ Resume';
+  } else {
+    pauseBtn.textContent = '⏸ Pause';
+  }
+  pauseBtn.disabled = !npState.hasPlaying;
+  document.getElementById('np-skip-now-btn').disabled = !npState.hasPlaying;
+  document.getElementById('np-backward-btn').disabled = !npState.hasPlaying || !duration;
+  document.getElementById('np-forward-btn').disabled = !npState.hasPlaying || !duration;
+}
+
+function applyNowPlayingData(data) {
+  renderNowPlayingRow('np-playing-text', data.playing, 'Nothing playing right now.', true);
+  renderNowPlayingRow('np-next-text', data.next, 'Nothing queued next.', false);
+
+  if (data.playing) {
+    npState.hasPlaying = true;
+    npState.elapsed = data.playing.elapsed_seconds ?? 0;
+    npState.duration = data.playing.duration_seconds ?? 0;
+    npState.isPaused = data.playing.is_paused ?? false;
+  } else {
+    npState.hasPlaying = false;
+    npState.elapsed = 0;
+    npState.duration = 0;
+    npState.isPaused = false;
+  }
+  updateAdminProgressUI();
+}
+
+// On-demand refresh — kept for admin actions (pause/skip/seek/etc.) that
+// want an immediate nudge rather than waiting for the next WebSocket push
+// (which arrives within ~1s anyway via the live connection below).
 async function loadNowPlaying() {
   try {
     const res = await fetch('/now-playing');
-    const data = await res.json();
-    renderNowPlayingRow('np-playing-text', data.playing, 'Nothing playing right now.', true);
-    renderNowPlayingRow('np-next-text', data.next, 'Nothing queued next.', false);
+    applyNowPlayingData(await res.json());
   } catch (err) {
     document.getElementById('np-playing-text').textContent = 'Could not load.';
     document.getElementById('np-next-text').textContent = 'Could not load.';
@@ -614,7 +959,150 @@ async function loadNowPlaying() {
 }
 
 loadNowPlaying();
-setInterval(loadNowPlaying, 10000);
+
+// --- Live now-playing updates over WebSocket ------------------------------
+// Replaces the old polling loop (10s for everyone, 1s for admins) with a
+// server-pushed stream: the backend re-broadcasts once a second to every
+// connected client, so song changes, skips, pauses, seeks, and queue
+// changes all show up within ~1s with no client-side polling at all.
+let nowPlayingSocket = null;
+let nowPlayingReconnectDelay = 1000;
+
+function connectNowPlayingSocket() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${protocol}//${location.host}/ws/now-playing`);
+  nowPlayingSocket = socket;
+
+  socket.addEventListener('open', () => {
+    nowPlayingReconnectDelay = 1000; // reset backoff after a successful connect
+  });
+
+  socket.addEventListener('message', (event) => {
+    try {
+      applyNowPlayingData(JSON.parse(event.data));
+    } catch (err) {
+      // Ignore malformed frames — the next push will self-correct.
+    }
+  });
+
+  socket.addEventListener('close', () => {
+    if (nowPlayingSocket !== socket) return; // superseded by a newer connection
+    setTimeout(connectNowPlayingSocket, nowPlayingReconnectDelay);
+    nowPlayingReconnectDelay = Math.min(nowPlayingReconnectDelay * 2, 15000);
+  });
+
+  socket.addEventListener('error', () => socket.close());
+}
+
+connectNowPlayingSocket();
+
+// Local tick: count elapsed up every second between server syncs (when playing & not paused)
+setInterval(() => {
+  if (!npState.hasPlaying || npState.isPaused || npState.isStopped || seekBarDragging) return;
+  if (!sessionStorage.getItem(AUTH_STORAGE_KEY)) return;
+  npState.elapsed = Math.min(npState.elapsed + 1, npState.duration || Infinity);
+  updateAdminProgressUI();
+}, 1000);
+
+// --- Admin playback controls ---------------------------------------------
+
+async function adminAction(path, body) {
+  const opts = { method: 'POST', headers: { ...getAuthHeader() } };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  if (res.status === 401) { setLoggedOut(); return false; }
+  return res.ok;
+}
+
+document.getElementById('np-pause-resume-btn').addEventListener('click', async () => {
+  if (npState.isPaused || npState.isStopped) {
+    await adminAction('/resume');
+    npState.isPaused = false;
+    npState.isStopped = false;
+  } else {
+    await adminAction('/pause');
+    npState.isPaused = true;
+  }
+  updateAdminProgressUI();
+  setTimeout(loadNowPlaying, 300);
+});
+
+document.getElementById('np-skip-now-btn').addEventListener('click', async () => {
+  await adminAction('/skip');
+  setTimeout(() => { loadNowPlaying(); loadQueue(); }, 600);
+});
+
+document.getElementById('np-backward-btn').addEventListener('click', async () => {
+  const target = Math.max(0, npState.elapsed - 10);
+  await adminAction('/seek', { seconds: target });
+  npState.elapsed = target;
+  npState.isPaused = false;
+  updateAdminProgressUI();
+});
+
+document.getElementById('np-forward-btn').addEventListener('click', async () => {
+  const target = Math.min(npState.duration || 0, npState.elapsed + 10);
+  await adminAction('/seek', { seconds: target });
+  npState.elapsed = target;
+  npState.isPaused = false;
+  updateAdminProgressUI();
+});
+
+// --- Volume slider -------------------------------------------------------
+
+const volumeBar = document.getElementById('np-volume-bar');
+const volumePct = document.getElementById('np-volume-pct');
+let volumeThrottleTimer = null;
+let volumeThrottlePending = false;
+
+async function loadVolume() {
+  try {
+    const res = await fetch('/volume', { headers: getAuthHeader() });
+    if (!res.ok) return;
+    const data = await res.json();
+    volumeBar.value = data.volume;
+    volumePct.textContent = data.volume + '%';
+  } catch (_) {}
+}
+
+volumeBar.addEventListener('input', () => {
+  volumePct.textContent = volumeBar.value + '%';
+  if (volumeThrottleTimer) {
+    volumeThrottlePending = true;
+    return;
+  }
+  const sendVolume = async () => {
+    await adminAction('/volume', { volume: parseInt(volumeBar.value) });
+    if (volumeThrottlePending) {
+      volumeThrottlePending = false;
+      volumeThrottleTimer = setTimeout(sendVolume, 100);
+    } else {
+      volumeThrottleTimer = null;
+    }
+  };
+  volumeThrottleTimer = setTimeout(sendVolume, 0);
+});
+
+// --- Seek bar: drag to scrub, release to seek
+const seekBar = document.getElementById('np-seek-bar');
+seekBar.addEventListener('mousedown', () => { seekBarDragging = true; });
+seekBar.addEventListener('touchstart', () => { seekBarDragging = true; });
+seekBar.addEventListener('input', () => {
+  // While dragging: just update elapsed display locally
+  npState.elapsed = parseFloat(seekBar.value);
+  document.getElementById('np-elapsed').textContent = formatTime(npState.elapsed);
+});
+seekBar.addEventListener('change', async () => {
+  seekBarDragging = false;
+  const target = parseFloat(seekBar.value);
+  await adminAction('/seek', { seconds: target });
+  npState.elapsed = target;
+  npState.isPaused = false;
+  updateAdminProgressUI();
+});
 
 // --- Auth -------------------------------------------------------------
 
@@ -633,26 +1121,45 @@ function setLoggedIn(username) {
   const bar = document.getElementById('logged-in-bar');
   bar.style.display = 'flex';
   document.getElementById('logged-in-user').textContent = username;
+  document.getElementById('tab-btn-dashboard').classList.remove('admin-only');
   document.getElementById('tab-btn-queue').classList.remove('admin-only');
   document.getElementById('tab-btn-playlists').classList.remove('admin-only');
+  document.getElementById('tab-btn-blacklist').classList.remove('admin-only');
+  document.getElementById('tab-btn-settings').classList.remove('admin-only');
   profileWidget.classList.add('logged-in');
   profileIconText.textContent = username.charAt(0).toUpperCase();
+  document.getElementById('np-admin-controls').style.display = 'block';
+  loadVolume();
   loadQueue();
   loadPlaylists();
+  loadBlacklist();
+  loadDashboard();
+  loadSettings();
 }
 
 function setLoggedOut() {
   sessionStorage.removeItem(AUTH_STORAGE_KEY);
   document.getElementById('login-form').style.display = 'flex';
   document.getElementById('logged-in-bar').style.display = 'none';
+  const dashboardTabBtn = document.getElementById('tab-btn-dashboard');
   const queueTabBtn = document.getElementById('tab-btn-queue');
   const playlistsTabBtn = document.getElementById('tab-btn-playlists');
-  const wasOnAdminTab = queueTabBtn.classList.contains('active') || playlistsTabBtn.classList.contains('active');
+  const blacklistTabBtn = document.getElementById('tab-btn-blacklist');
+  const settingsTabBtn = document.getElementById('tab-btn-settings');
+  const wasOnAdminTab = dashboardTabBtn.classList.contains('active')
+    || queueTabBtn.classList.contains('active')
+    || playlistsTabBtn.classList.contains('active')
+    || blacklistTabBtn.classList.contains('active')
+    || settingsTabBtn.classList.contains('active');
+  dashboardTabBtn.classList.add('admin-only');
   queueTabBtn.classList.add('admin-only');
   playlistsTabBtn.classList.add('admin-only');
+  blacklistTabBtn.classList.add('admin-only');
+  settingsTabBtn.classList.add('admin-only');
   if (wasOnAdminTab) switchTab('enqueue');
   profileWidget.classList.remove('logged-in');
   profileIconText.textContent = '🪁';
+  document.getElementById('np-admin-controls').style.display = 'none';
 }
 
 // Hover opens the popover on desktop; tapping the icon toggles it open on
@@ -764,9 +1271,13 @@ async function loadQueue() {
     queueEmpty.style.display = 'none';
     queueTable.style.display = 'table';
 
-    for (const song of songs) {
+    let queueDragSrcIndex = null;
+    const queuedSongIds = songs.filter(s => s.status === 'queued').map(s => s.id);
+
+    songs.forEach((song, index) => {
       const row = document.createElement('tr');
-      const shortId = song.id.length > 8 ? song.id.slice(0, 8) + '…' : song.id;
+      row.dataset.index = index;
+      row.dataset.songId = song.id;
 
       const cell = (text, className) => {
         const td = document.createElement('td');
@@ -775,25 +1286,45 @@ async function loadQueue() {
         return td;
       };
 
-      row.appendChild(cell(song.position_in_queue));
+      // Drag handle — only for queued songs
+      const handleCell = document.createElement('td');
+      if (song.status === 'queued') {
+        handleCell.className = 'drag-handle';
+        handleCell.textContent = '⠿';
+        handleCell.title = 'Drag to reorder';
+      }
+      row.appendChild(handleCell);
 
-      const idCell = cell(shortId);
-      idCell.title = song.id;
-      row.appendChild(idCell);
+      // Title cell: source icon + clickable title + playing badge
+      const titleTd = document.createElement('td');
+      titleTd.style.cssText = 'white-space:normal; max-width:280px;';
+      const titleLine = document.createElement('div');
+      titleLine.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
+      // Source icon (no text)
+      if (song.source) {
+        const iconSpan = document.createElement('span');
+        iconSpan.style.cssText = 'flex-shrink:0; line-height:1;';
+        iconSpan.innerHTML = sourceIconHtml(song.source);
+        titleLine.appendChild(iconSpan);
+      }
+      // Title as link
+      const titleLink = document.createElement('a');
+      titleLink.href = song.url;
+      titleLink.target = '_blank';
+      titleLink.rel = 'noopener noreferrer';
+      titleLink.textContent = song.title || '(unknown title)';
+      titleLink.style.cssText = 'font-weight:500;';
+      titleLine.appendChild(titleLink);
+      // Playing badge
+      if (song.status === 'playing') {
+        const sb = document.createElement('span');
+        sb.textContent = '▶ playing';
+        sb.style.cssText = 'font-size:0.7rem; background:#e8f5e9; color:#2e7d32; padding:1px 5px; border-radius:8px; white-space:nowrap;';
+        titleLine.appendChild(sb);
+      }
+      titleTd.appendChild(titleLine);
+      row.appendChild(titleTd);
 
-      row.appendChild(cell(song.title || '(unknown title)', 'title-cell'));
-      row.appendChild(cell(song.uploader || '(unknown)'));
-
-      const urlCell = document.createElement('td');
-      const link = document.createElement('a');
-      link.href = song.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = 'link';
-      urlCell.appendChild(link);
-      row.appendChild(urlCell);
-
-      row.appendChild(cell(song.status));
       row.appendChild(cell(song.duration));
       row.appendChild(cell(song.estimated_wait));
 
@@ -806,13 +1337,58 @@ async function loadQueue() {
       actionCell.appendChild(skipSongBtn);
       row.appendChild(actionCell);
 
+      // Drag-and-drop (queued songs only)
+      if (song.status === 'queued') {
+        const queuedIndex = queuedSongIds.indexOf(song.id);
+        row.draggable = true;
+
+        row.addEventListener('dragstart', (e) => {
+          queueDragSrcIndex = queuedIndex;
+          e.dataTransfer.effectAllowed = 'move';
+          setTimeout(() => row.classList.add('dragging'), 0);
+        });
+        row.addEventListener('dragend', () => {
+          row.classList.remove('dragging');
+          queueBody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over'));
+        });
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          queueBody.querySelectorAll('tr[draggable]').forEach((r, i) => {
+            r.classList.toggle('drag-over', i === queuedIndex);
+          });
+        });
+        row.addEventListener('drop', (e) => {
+          e.preventDefault();
+          queueBody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over'));
+          if (queueDragSrcIndex === null || queueDragSrcIndex === queuedIndex) return;
+          const newOrder = [...queuedSongIds];
+          const [moved] = newOrder.splice(queueDragSrcIndex, 1);
+          newOrder.splice(queuedIndex, 0, moved);
+          queueDragSrcIndex = null;
+          sendQueueReorder(newOrder);
+        });
+      }
+
       queueBody.appendChild(row);
-    }
+    });
   } catch (err) {
     queueEmpty.textContent = 'Failed to load queue: ' + err.message;
     queueEmpty.style.display = 'block';
     queueTable.style.display = 'none';
   }
+}
+
+async function sendQueueReorder(newOrder) {
+  try {
+    const res = await fetch('/queue/reorder', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify({ song_ids: newOrder }),
+    });
+    if (res.status === 401) { setLoggedOut(); return; }
+    if (res.ok) await loadQueue();
+  } catch (_) {}
 }
 
 async function skipSong(songId, buttonEl) {
@@ -1044,6 +1620,8 @@ const managePlaylistEmpty = document.getElementById('manage-playlist-empty');
 const managePlaylistCloseBtn = document.getElementById('manage-playlist-close-btn');
 
 let currentManagedPlaylistId = null;
+let managedSongIds = [];   // current ordered song IDs, kept in sync for reorder calls
+let dragSrcIndex = null;
 
 function openManagePlaylist(playlistId, playlistName) {
   currentManagedPlaylistId = playlistId;
@@ -1052,6 +1630,18 @@ function openManagePlaylist(playlistId, playlistName) {
   managePlaylistUrlInput.value = '';
   managePlaylistModal.showModal();
   loadManagedPlaylistSongs();
+}
+
+async function sendReorder(newOrder) {
+  try {
+    const res = await fetch(`/playlists/${encodeURIComponent(currentManagedPlaylistId)}/songs/reorder`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify({ song_ids: newOrder }),
+    });
+    if (res.status === 401) { setLoggedOut(); return; }
+    if (res.ok) await loadManagedPlaylistSongs();
+  } catch (_) {}
 }
 
 async function loadManagedPlaylistSongs() {
@@ -1067,7 +1657,9 @@ async function loadManagedPlaylistSongs() {
     const data = await res.json();
     const songs = data.songs || [];
 
+    managedSongIds = songs.map(s => s.id);
     managePlaylistBody.innerHTML = '';
+
     if (songs.length === 0) {
       managePlaylistTable.style.display = 'none';
       managePlaylistEmpty.style.display = 'block';
@@ -1078,6 +1670,7 @@ async function loadManagedPlaylistSongs() {
 
     songs.forEach((song, index) => {
       const row = document.createElement('tr');
+      row.dataset.index = index;
 
       const cell = (text, className) => {
         const td = document.createElement('td');
@@ -1086,18 +1679,30 @@ async function loadManagedPlaylistSongs() {
         return td;
       };
 
-      row.appendChild(cell(index + 1));
-      row.appendChild(cell(song.title || '(unknown title)', 'title-cell'));
-      row.appendChild(cell(song.uploader || '(unknown)'));
+      // Drag handle
+      const handleCell = document.createElement('td');
+      handleCell.className = 'drag-handle';
+      handleCell.textContent = '⠿';
+      handleCell.title = 'Drag to reorder';
+      row.appendChild(handleCell);
 
-      const urlCell = document.createElement('td');
-      const link = document.createElement('a');
-      link.href = song.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = 'link';
-      urlCell.appendChild(link);
-      row.appendChild(urlCell);
+      // Title + uploader + link icon in one cell
+      const titleCell = document.createElement('td');
+      titleCell.className = 'title-cell';
+      titleCell.style.lineHeight = '1.3';
+      const titleLink = document.createElement('a');
+      titleLink.href = song.url;
+      titleLink.target = '_blank';
+      titleLink.rel = 'noopener noreferrer';
+      titleLink.textContent = song.title || song.url;
+      titleCell.appendChild(titleLink);
+      if (song.uploader) {
+        const sub = document.createElement('div');
+        sub.style.cssText = 'font-size:0.75rem;color:#888;margin-top:1px;';
+        sub.textContent = song.uploader;
+        titleCell.appendChild(sub);
+      }
+      row.appendChild(titleCell);
 
       row.appendChild(cell(song.duration));
 
@@ -1108,7 +1713,82 @@ async function loadManagedPlaylistSongs() {
       removeBtn.textContent = 'Remove';
       removeBtn.addEventListener('click', () => removeManagedPlaylistSong(song.id, removeBtn));
       actionCell.appendChild(removeBtn);
+
+      const plEnqBtn = document.createElement('button');
+      plEnqBtn.type = 'button';
+      plEnqBtn.className = 'small';
+      plEnqBtn.style.marginLeft = '6px';
+      plEnqBtn.textContent = 'Enqueue';
+      const plEnqResult = document.createElement('div');
+      plEnqResult.className = 'history-enqueue-result';
+      plEnqBtn.addEventListener('click', async () => {
+        plEnqBtn.disabled = true;
+        plEnqResult.className = 'history-enqueue-result';
+        plEnqResult.textContent = 'Enqueueing…';
+        try {
+          const r = await fetch('/enqueue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+            body: JSON.stringify({ urls: [song.url] }),
+          });
+          const d = await r.json();
+          if (!r.ok) {
+            plEnqResult.className = 'history-enqueue-result err';
+            plEnqResult.textContent = formatError(d);
+          } else if (d.enqueued && d.enqueued.length > 0) {
+            const s = d.enqueued[0];
+            plEnqResult.className = 'history-enqueue-result ok';
+            plEnqResult.textContent = `✓ Position ${s.position_in_queue}, wait ${s.estimated_wait}`;
+            loadNowPlaying();
+            loadWaitTime();
+          } else {
+            plEnqResult.className = 'history-enqueue-result err';
+            plEnqResult.textContent = d.rejected?.[0]?.reason || 'Rejected.';
+          }
+        } catch (err) {
+          plEnqResult.className = 'history-enqueue-result err';
+          plEnqResult.textContent = 'Request failed.';
+        } finally {
+          plEnqBtn.disabled = false;
+        }
+      });
+      actionCell.appendChild(plEnqBtn);
+      actionCell.appendChild(plEnqResult);
       row.appendChild(actionCell);
+
+      // Drag-and-drop events
+      row.draggable = true;
+
+      row.addEventListener('dragstart', (e) => {
+        dragSrcIndex = index;
+        e.dataTransfer.effectAllowed = 'move';
+        // Use setTimeout so the class applies after the browser captures the drag image
+        setTimeout(() => row.classList.add('dragging'), 0);
+      });
+
+      row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        managePlaylistBody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over'));
+      });
+
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        managePlaylistBody.querySelectorAll('tr').forEach((r, i) => {
+          r.classList.toggle('drag-over', i === index);
+        });
+      });
+
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        managePlaylistBody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over'));
+        if (dragSrcIndex === null || dragSrcIndex === index) return;
+        const newOrder = [...managedSongIds];
+        const [moved] = newOrder.splice(dragSrcIndex, 1);
+        newOrder.splice(index, 0, moved);
+        dragSrcIndex = null;
+        sendReorder(newOrder);
+      });
 
       managePlaylistBody.appendChild(row);
     });
@@ -1223,6 +1903,385 @@ skipBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Blacklist (admin only) ---------------------------------------------
+
+const blacklistResult = document.getElementById('blacklist-result');
+const blacklistVideoForm = document.getElementById('blacklist-video-form');
+const blacklistVideoInput = document.getElementById('blacklist-video-input');
+const blacklistVideosTable = document.getElementById('blacklist-videos-table');
+const blacklistVideosBody = document.getElementById('blacklist-videos-body');
+const blacklistVideosEmpty = document.getElementById('blacklist-videos-empty');
+const blacklistRequesterForm = document.getElementById('blacklist-requester-form');
+const blacklistRequesterSource = document.getElementById('blacklist-requester-source');
+const blacklistRequesterInput = document.getElementById('blacklist-requester-input');
+const blacklistRequestersTable = document.getElementById('blacklist-requesters-table');
+const blacklistRequestersBody = document.getElementById('blacklist-requesters-body');
+const blacklistRequestersEmpty = document.getElementById('blacklist-requesters-empty');
+
+const REQUESTER_SOURCE_LABELS = { whatsapp: 'WhatsApp', telegram: 'Telegram', ip: 'Web (IP)' };
+
+function showBlacklistMessage(text, isError) {
+  blacklistResult.className = isError ? 'err' : 'ok';
+  blacklistResult.textContent = text;
+  blacklistResult.style.display = 'block';
+}
+
+function makeRemoveButton(onClick) {
+  const td = document.createElement('td');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'secondary';
+  btn.textContent = 'Remove';
+  btn.addEventListener('click', onClick);
+  td.appendChild(btn);
+  return td;
+}
+
+async function loadBlacklist() {
+  if (!sessionStorage.getItem(AUTH_STORAGE_KEY)) return;
+  try {
+    const res = await fetch('/blacklist', { headers: getAuthHeader() });
+    if (res.status === 401) { setLoggedOut(); return; }
+    const data = await res.json();
+
+    // Videos
+    blacklistVideosBody.innerHTML = '';
+    const videoIds = data.video_ids || [];
+    if (videoIds.length === 0) {
+      blacklistVideosTable.style.display = 'none';
+      blacklistVideosEmpty.style.display = 'block';
+    } else {
+      blacklistVideosEmpty.style.display = 'none';
+      blacklistVideosTable.style.display = 'table';
+      for (const vid of videoIds) {
+        const row = document.createElement('tr');
+        const idCell = document.createElement('td');
+        const link = document.createElement('a');
+        link.href = `https://youtu.be/${vid}`;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = vid;
+        idCell.appendChild(link);
+        row.appendChild(idCell);
+        row.appendChild(makeRemoveButton(() => removeBlacklistVideo(vid)));
+        blacklistVideosBody.appendChild(row);
+      }
+    }
+
+    // Requesters
+    blacklistRequestersBody.innerHTML = '';
+    const requesters = data.requesters || [];
+    if (requesters.length === 0) {
+      blacklistRequestersTable.style.display = 'none';
+      blacklistRequestersEmpty.style.display = 'block';
+    } else {
+      blacklistRequestersEmpty.style.display = 'none';
+      blacklistRequestersTable.style.display = 'table';
+      for (const r of requesters) {
+        const row = document.createElement('tr');
+        const typeCell = document.createElement('td');
+        typeCell.textContent = REQUESTER_SOURCE_LABELS[r.source] || r.source;
+        const valueCell = document.createElement('td');
+        valueCell.textContent = r.value;
+        row.appendChild(typeCell);
+        row.appendChild(valueCell);
+        row.appendChild(makeRemoveButton(() => removeBlacklistRequester(r.source, r.value)));
+        blacklistRequestersBody.appendChild(row);
+      }
+    }
+  } catch (err) {
+    showBlacklistMessage('Failed to load blacklist: ' + err.message, true);
+  }
+}
+
+async function addBlacklistVideo(videoId) {
+  const res = await fetch('/blacklist/video', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify({ video_id: videoId }),
+  });
+  if (res.status === 401) { setLoggedOut(); return; }
+  const data = await res.json();
+  if (!res.ok) { showBlacklistMessage(formatError(data), true); return; }
+  showBlacklistMessage(
+    data.status === 'already_present' ? `Video ${data.video_id} was already blocked.` : `Blocked video ${data.video_id}.`,
+    false
+  );
+  loadBlacklist();
+}
+
+async function removeBlacklistVideo(videoId) {
+  const res = await fetch(`/blacklist/video/${encodeURIComponent(videoId)}`, {
+    method: 'DELETE',
+    headers: getAuthHeader(),
+  });
+  if (res.status === 401) { setLoggedOut(); return; }
+  if (res.ok) { showBlacklistMessage(`Unblocked video ${videoId}.`, false); loadBlacklist(); }
+}
+
+async function addBlacklistRequester(source, value) {
+  const res = await fetch('/blacklist/requester', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+    body: JSON.stringify({ source, value }),
+  });
+  if (res.status === 401) { setLoggedOut(); return; }
+  const data = await res.json();
+  if (!res.ok) { showBlacklistMessage(formatError(data), true); return; }
+  const label = REQUESTER_SOURCE_LABELS[source] || source;
+  showBlacklistMessage(
+    data.status === 'already_present' ? `${label} ${value} was already blocked.` : `Blocked ${label} ${value}.`,
+    false
+  );
+  loadBlacklist();
+}
+
+async function removeBlacklistRequester(source, value) {
+  const params = new URLSearchParams({ source, value });
+  const res = await fetch(`/blacklist/requester?${params.toString()}`, {
+    method: 'DELETE',
+    headers: getAuthHeader(),
+  });
+  if (res.status === 401) { setLoggedOut(); return; }
+  if (res.ok) { showBlacklistMessage(`Unblocked ${value}.`, false); loadBlacklist(); }
+}
+
+blacklistVideoForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const val = blacklistVideoInput.value.trim();
+  if (!val) return;
+  addBlacklistVideo(val);
+  blacklistVideoInput.value = '';
+});
+
+blacklistRequesterForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const val = blacklistRequesterInput.value.trim();
+  if (!val) return;
+  addBlacklistRequester(blacklistRequesterSource.value, val);
+  blacklistRequesterInput.value = '';
+});
+
+// --- Dashboard (admin only) ---------------------------------------------
+
+const SOURCE_LABELS = { whatsapp: 'WhatsApp', telegram: 'Telegram', web: 'Web', ip: 'Web (IP)', api: 'API', unknown: 'Unknown' };
+function sourceLabel(s) { return SOURCE_LABELS[s] || s; }
+
+async function loadDashboard() {
+  if (!sessionStorage.getItem(AUTH_STORAGE_KEY)) return;
+  const resultEl = document.getElementById('dashboard-result');
+  try {
+    const res = await fetch('/stats', { headers: getAuthHeader() });
+    if (res.status === 401) { setLoggedOut(); return; }
+    const data = await res.json();
+    resultEl.textContent = '';
+
+    document.getElementById('stat-total-plays').textContent = data.total_plays ?? 0;
+    document.getElementById('stat-total-playtime').textContent = data.total_playtime || '0s';
+
+    // Playtime by source
+    const srcBody = document.getElementById('dashboard-source-body');
+    const srcTable = document.getElementById('dashboard-source-table');
+    const srcEmpty = document.getElementById('dashboard-source-empty');
+    srcBody.innerHTML = '';
+    const bySource = data.by_source || [];
+    if (bySource.length === 0) {
+      srcTable.style.display = 'none'; srcEmpty.style.display = 'block';
+    } else {
+      srcEmpty.style.display = 'none'; srcTable.style.display = 'table';
+      for (const row of bySource) {
+        const tr = document.createElement('tr');
+        [sourceLabel(row.source), row.plays, row.playtime].forEach(v => {
+          const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+        });
+        srcBody.appendChild(tr);
+      }
+    }
+
+    // Top requesters
+    const reqBody = document.getElementById('dashboard-requesters-body');
+    const reqTable = document.getElementById('dashboard-requesters-table');
+    const reqEmpty = document.getElementById('dashboard-requesters-empty');
+    reqBody.innerHTML = '';
+    const requesters = data.top_requesters || [];
+    if (requesters.length === 0) {
+      reqTable.style.display = 'none'; reqEmpty.style.display = 'block';
+    } else {
+      reqEmpty.style.display = 'none'; reqTable.style.display = 'table';
+      requesters.forEach((row, i) => {
+        const tr = document.createElement('tr');
+        [i + 1, sourceLabel(row.source), row.value || '—', row.count, row.playtime].forEach(v => {
+          const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+        });
+        reqBody.appendChild(tr);
+      });
+    }
+
+    // Most-requested songs
+    const songBody = document.getElementById('dashboard-songs-body');
+    const songTable = document.getElementById('dashboard-songs-table');
+    const songEmpty = document.getElementById('dashboard-songs-empty');
+    songBody.innerHTML = '';
+    const songs = data.top_songs || [];
+    if (songs.length === 0) {
+      songTable.style.display = 'none'; songEmpty.style.display = 'block';
+    } else {
+      songEmpty.style.display = 'none'; songTable.style.display = 'table';
+      songs.forEach((row, i) => {
+        const tr = document.createElement('tr');
+        const rankTd = document.createElement('td'); rankTd.textContent = i + 1; tr.appendChild(rankTd);
+        const titleTd = document.createElement('td');
+        if (row.url) {
+          const a = document.createElement('a');
+          a.href = row.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+          a.textContent = row.title || row.video_id;
+          titleTd.appendChild(a);
+        } else {
+          titleTd.textContent = row.title || row.video_id;
+        }
+        tr.appendChild(titleTd);
+        const countTd = document.createElement('td'); countTd.textContent = row.count; tr.appendChild(countTd);
+        songBody.appendChild(tr);
+      });
+    }
+  } catch (err) {
+    resultEl.className = 'err';
+    resultEl.textContent = 'Failed to load dashboard: ' + err.message;
+    resultEl.style.display = 'block';
+  }
+}
+
+document.getElementById('refresh-dashboard-btn').addEventListener('click', loadDashboard);
+
+// --- Settings (admin only) ----------------------------------------------
+
+const settingsFields = document.getElementById('settings-fields');
+const settingsResult = document.getElementById('settings-result');
+const settingsForm = document.getElementById('settings-form');
+const settingsResetBtn = document.getElementById('settings-reset-btn');
+
+function showSettingsMessage(text, isError) {
+  settingsResult.className = isError ? 'err' : 'ok';
+  settingsResult.textContent = text;
+  settingsResult.style.display = 'block';
+}
+
+function renderSettings(settings) {
+  settingsFields.innerHTML = '';
+  // Stable order for readability.
+  const order = [
+    'rate_limit_max_songs', 'rate_limit_window_seconds', 'max_queue_wait_seconds',
+    'max_duration_seconds', 'normalize_volume', 'loudnorm_target_lufs', 'crossfade_lead_seconds',
+  ];
+  const keys = order.filter(k => k in settings).concat(Object.keys(settings).filter(k => !order.includes(k)));
+
+  for (const key of keys) {
+    const s = settings[key];
+    const row = document.createElement('div');
+    row.className = 'setting-row';
+
+    const info = document.createElement('div');
+    info.className = 'setting-info';
+    const label = document.createElement('div');
+    label.className = 'setting-label';
+    label.textContent = s.label || key;
+    const def = document.createElement('span');
+    def.className = 'setting-default';
+    def.textContent = `default: ${s.default}`;
+    label.appendChild(def);
+    info.appendChild(label);
+    if (s.help) {
+      const help = document.createElement('div');
+      help.className = 'setting-help';
+      help.textContent = s.help;
+      info.appendChild(help);
+    }
+
+    const control = document.createElement('div');
+    control.className = 'setting-control';
+    let input;
+    if (s.type === 'bool') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !!s.value;
+    } else {
+      input = document.createElement('input');
+      input.type = 'number';
+      input.value = s.value;
+      if (s.type === 'float') input.step = 'any';
+      if (typeof s.min === 'number') input.min = s.min;
+      if (typeof s.max === 'number') input.max = s.max;
+    }
+    input.dataset.key = key;
+    input.dataset.type = s.type;
+    control.appendChild(input);
+    if (s.unit) {
+      const unit = document.createElement('span');
+      unit.className = 'setting-unit';
+      unit.textContent = s.unit;
+      control.appendChild(unit);
+    }
+
+    row.appendChild(info);
+    row.appendChild(control);
+    settingsFields.appendChild(row);
+  }
+}
+
+async function loadSettings() {
+  if (!sessionStorage.getItem(AUTH_STORAGE_KEY)) return;
+  try {
+    const res = await fetch('/config', { headers: getAuthHeader() });
+    if (res.status === 401) { setLoggedOut(); return; }
+    const data = await res.json();
+    renderSettings(data.settings || {});
+  } catch (err) {
+    showSettingsMessage('Failed to load settings: ' + err.message, true);
+  }
+}
+
+settingsForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const changes = {};
+  settingsFields.querySelectorAll('input[data-key]').forEach(input => {
+    const key = input.dataset.key;
+    if (input.dataset.type === 'bool') {
+      changes[key] = input.checked;
+    } else {
+      changes[key] = input.value === '' ? null : Number(input.value);
+    }
+  });
+  // Drop nulls (left blank) so they aren't sent as invalid.
+  Object.keys(changes).forEach(k => { if (changes[k] === null) delete changes[k]; });
+  try {
+    const res = await fetch('/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify({ changes }),
+    });
+    if (res.status === 401) { setLoggedOut(); return; }
+    const data = await res.json();
+    if (!res.ok) { showSettingsMessage(formatError(data), true); return; }
+    renderSettings(data.settings || {});
+    showSettingsMessage('Settings saved.', false);
+  } catch (err) {
+    showSettingsMessage('Failed to save: ' + err.message, true);
+  }
+});
+
+settingsResetBtn.addEventListener('click', async () => {
+  if (!confirm('Reset all settings to their .env defaults?')) return;
+  try {
+    const res = await fetch('/config/reset', { method: 'POST', headers: getAuthHeader() });
+    if (res.status === 401) { setLoggedOut(); return; }
+    const data = await res.json();
+    renderSettings(data.settings || {});
+    showSettingsMessage('Settings reset to defaults.', false);
+  } catch (err) {
+    showSettingsMessage('Failed to reset: ' + err.message, true);
+  }
+});
+
 // --- Enqueue (open to everyone) -----------------------------------------
 
 const waitTimeBanner = document.getElementById('wait-time-banner');
@@ -1333,43 +2392,249 @@ form.addEventListener('submit', async (e) => {
   }
 });
 
-// --- Check wait time (open to everyone) ----------------------------------
+// --- History (open to everyone) ------------------------------------------
 
-const statusForm = document.getElementById('status-form');
-const songIdInput = document.getElementById('song-id');
-const statusBtn = document.getElementById('status-btn');
-const statusResult = document.getElementById('status-result');
+let historyPage = 1;
+let historyPerPage = 10;
 
-statusForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const songId = songIdInput.value.trim();
-  if (!songId) return;
+function formatPlayedAt(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 
-  statusBtn.disabled = true;
-  statusResult.className = '';
-  statusResult.textContent = 'Checking...';
-  statusResult.style.display = 'block';
+// Build the "Add to playlist" popover for a single history row
+async function buildPlaylistPopover(song, container) {
+  container.innerHTML = '<span style="font-size:0.78rem;color:#888;">Loading playlists…</span>';
+  try {
+    const res = await fetch('/playlists', { headers: getAuthHeader() });
+    if (!res.ok) { container.innerHTML = '<span style="font-size:0.78rem;color:#b71c1c;">Could not load playlists.</span>'; return; }
+    const data = await res.json();
+    const playlists = data.playlists || [];
+    if (playlists.length === 0) { container.innerHTML = '<span style="font-size:0.78rem;color:#888;">No playlists yet.</span>'; return; }
+
+    container.innerHTML = '';
+
+    // Checkbox list
+    const form = document.createElement('div');
+    form.style.cssText = 'display:flex;flex-direction:column;gap:4px;margin-bottom:6px;';
+    const checkboxes = [];
+    playlists.forEach(pl => {
+      const label = document.createElement('label');
+      label.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:0.8rem;cursor:pointer;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = pl.id;
+      cb.dataset.name = pl.name;
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(pl.name));
+      form.appendChild(label);
+      checkboxes.push(cb);
+    });
+    container.appendChild(form);
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'small';
+    addBtn.textContent = 'Add to selected';
+    const feedbackEl = document.createElement('div');
+    feedbackEl.style.cssText = 'font-size:0.78rem;margin-top:3px;';
+
+    addBtn.addEventListener('click', async () => {
+      const selected = checkboxes.filter(cb => cb.checked);
+      if (selected.length === 0) { feedbackEl.style.color = '#b71c1c'; feedbackEl.textContent = 'Select at least one playlist.'; return; }
+      addBtn.disabled = true;
+      feedbackEl.style.color = '#555';
+      feedbackEl.textContent = 'Adding…';
+
+      const results = await Promise.all(selected.map(async cb => {
+        const r = await fetch(`/playlists/${encodeURIComponent(cb.value)}/songs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+          body: JSON.stringify({ urls: [song.url] }),
+        });
+        const d = await r.json();
+        return { name: cb.dataset.name, ok: r.ok && d.added && d.added.length > 0, rejected: d.rejected && d.rejected[0] };
+      }));
+
+      const ok = results.filter(r => r.ok).map(r => r.name);
+      const fail = results.filter(r => !r.ok);
+      let msg = ok.length ? `✓ Added to: ${ok.join(', ')}` : '';
+      if (fail.length) msg += (msg ? ' | ' : '') + `✗ Failed: ${fail.map(r => r.name).join(', ')}`;
+      feedbackEl.style.color = ok.length ? '#1b5e20' : '#b71c1c';
+      feedbackEl.textContent = msg;
+      addBtn.disabled = false;
+    });
+
+    container.appendChild(addBtn);
+    container.appendChild(feedbackEl);
+  } catch (_) {
+    container.innerHTML = '<span style="font-size:0.78rem;color:#b71c1c;">Error loading playlists.</span>';
+  }
+}
+
+async function loadHistory(page) {
+  historyPage = page || historyPage;
+  const loadingEl = document.getElementById('history-loading');
+  const emptyEl = document.getElementById('history-empty');
+  const tableEl = document.getElementById('history-table');
+  const bodyEl = document.getElementById('history-body');
+  const paginationEl = document.getElementById('history-pagination');
+  const pageInfoEl = document.getElementById('history-page-info');
+  const prevBtn = document.getElementById('history-prev-btn');
+  const nextBtn = document.getElementById('history-next-btn');
+
+  loadingEl.style.display = 'block';
+  emptyEl.style.display = 'none';
+  tableEl.style.display = 'none';
+  paginationEl.style.display = 'none';
 
   try {
-    const res = await fetch(`/status/${encodeURIComponent(songId)}`);
+    const q = encodeURIComponent((document.getElementById('history-search')?.value || '').trim());
+    const res = await fetch(`/history?page=${historyPage}&per_page=${historyPerPage}&q=${q}`);
     const data = await res.json();
+    loadingEl.style.display = 'none';
 
-    if (!res.ok) {
-      statusResult.className = 'err';
-      statusResult.textContent = formatError(data);
-    } else {
-      statusResult.className = 'ok';
-      statusResult.textContent =
-        `${data.title || '(unknown title)'} — ${data.uploader || '(unknown uploader)'}\n` +
-        `Status: ${data.status}. Position ${data.position_in_queue}, ` +
-        `estimated wait ${data.estimated_wait}.`;
+    if (!data.songs || data.songs.length === 0) {
+      emptyEl.style.display = 'block';
+      return;
     }
+
+    const isAdmin = !!sessionStorage.getItem(AUTH_STORAGE_KEY);
+    bodyEl.innerHTML = '';
+    const offset = (data.page - 1) * data.per_page;
+
+    data.songs.forEach((song, i) => {
+      const row = document.createElement('tr');
+
+      const numCell = document.createElement('td');
+      numCell.textContent = offset + i + 1;
+      row.appendChild(numCell);
+
+      const titleCell = document.createElement('td');
+      titleCell.style.cssText = 'white-space:normal;';
+      const titleLine = document.createElement('div');
+      titleLine.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
+      if (song.source) {
+        const iconSpan = document.createElement('span');
+        iconSpan.style.cssText = 'flex-shrink:0; line-height:1;';
+        iconSpan.innerHTML = sourceIconHtml(song.source);
+        titleLine.appendChild(iconSpan);
+      }
+      const link = document.createElement('a');
+      link.href = song.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = song.title || song.url;
+      titleLine.appendChild(link);
+      titleCell.appendChild(titleLine);
+      row.appendChild(titleCell);
+
+      const cell = (text) => { const td = document.createElement('td'); td.textContent = text || '—'; return td; };
+      row.appendChild(cell(song.duration_fmt));
+      row.appendChild(cell(formatPlayedAt(song.played_at)));
+
+      // --- Action cell ---
+      const actionCell = document.createElement('td');
+      actionCell.style.minWidth = '130px';
+
+      // Enqueue button
+      const enqBtn = document.createElement('button');
+      enqBtn.type = 'button';
+      enqBtn.className = 'small';
+      enqBtn.textContent = 'Enqueue';
+      const enqResult = document.createElement('div');
+      enqResult.className = 'history-enqueue-result';
+
+      enqBtn.addEventListener('click', async () => {
+        enqBtn.disabled = true;
+        enqResult.className = 'history-enqueue-result';
+        enqResult.textContent = 'Enqueueing…';
+        try {
+          const r = await fetch('/enqueue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+            body: JSON.stringify({ urls: [song.url] }),
+          });
+          const d = await r.json();
+          if (!r.ok) {
+            enqResult.className = 'history-enqueue-result err';
+            enqResult.textContent = formatError(d);
+          } else if (d.enqueued && d.enqueued.length > 0) {
+            enqResult.className = 'history-enqueue-result ok';
+            enqResult.textContent = `✓ Queued! Wait: ${d.enqueued[0].estimated_wait}`;
+            loadNowPlaying();
+          } else {
+            enqResult.className = 'history-enqueue-result err';
+            enqResult.textContent = (d.rejected && d.rejected[0]) ? d.rejected[0].reason : 'Rejected.';
+          }
+        } catch (_) {
+          enqResult.className = 'history-enqueue-result err';
+          enqResult.textContent = 'Request failed.';
+        } finally {
+          enqBtn.disabled = false;
+        }
+      });
+
+      actionCell.appendChild(enqBtn);
+      actionCell.appendChild(enqResult);
+
+      // "Add to playlist" button — admin only
+      if (isAdmin) {
+        const plBtn = document.createElement('button');
+        plBtn.type = 'button';
+        plBtn.className = 'small secondary';
+        plBtn.style.marginTop = '4px';
+        plBtn.textContent = '＋ Playlist';
+
+        // Inline popover panel (hidden by default)
+        const plPanel = document.createElement('div');
+        plPanel.style.cssText = 'display:none;margin-top:5px;padding:8px 10px;background:#f9f5ff;border:1px solid #d1c4e9;border-radius:6px;';
+        let plLoaded = false;
+
+        plBtn.addEventListener('click', async () => {
+          const open = plPanel.style.display !== 'none';
+          plPanel.style.display = open ? 'none' : 'block';
+          if (!open && !plLoaded) {
+            plLoaded = true;
+            await buildPlaylistPopover(song, plPanel);
+          }
+        });
+
+        actionCell.appendChild(document.createElement('br'));
+        actionCell.appendChild(plBtn);
+        actionCell.appendChild(plPanel);
+      }
+
+      row.appendChild(actionCell);
+      bodyEl.appendChild(row);
+    });
+
+    tableEl.style.display = 'table';
+    pageInfoEl.textContent = `Page ${data.page} of ${data.total_pages} (${data.total} songs)`;
+    prevBtn.disabled = data.page <= 1;
+    nextBtn.disabled = data.page >= data.total_pages;
+    paginationEl.style.display = 'flex';
+
   } catch (err) {
-    statusResult.className = 'err';
-    statusResult.textContent = 'Request failed: ' + err.message;
-  } finally {
-    statusBtn.disabled = false;
+    loadingEl.style.display = 'none';
+    emptyEl.textContent = 'Failed to load history.';
+    emptyEl.style.display = 'block';
   }
+}
+
+document.getElementById('history-per-page').addEventListener('change', (e) => {
+  historyPerPage = parseInt(e.target.value);
+  loadHistory(1);
+});
+document.getElementById('history-refresh-btn').addEventListener('click', () => loadHistory(1));
+document.getElementById('history-search').addEventListener('input', () => loadHistory(1));
+document.getElementById('history-prev-btn').addEventListener('click', () => loadHistory(historyPage - 1));
+document.getElementById('history-next-btn').addEventListener('click', () => loadHistory(historyPage + 1));
+
+// Load history when the tab is activated
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  if (btn.dataset.tab === 'history') btn.addEventListener('click', () => loadHistory(1));
 });
 </script>
 </body>
