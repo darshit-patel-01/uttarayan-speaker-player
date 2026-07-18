@@ -50,6 +50,9 @@ const ADMIN_TELEGRAM_IDS = (process.env.ADMIN_TELEGRAM_IDS || "")
 // Pending play notifications: song_id -> { chatId, title }
 const pendingNotifications = new Map();
 
+// Blocked-user appeal: chatId -> { senderId, expiresAt }
+const pendingAppeals = new Map();
+
 // Status command: reply with now-playing + queue info
 const STATUS_COMMAND_RE = /^\s*\/?(status|queue|wait)\s*$/i;
 
@@ -86,19 +89,23 @@ async function handleStatusCommand() {
 // that just contain a bare link with no "play" in front are ignored, so
 // people can share YouTube links in chat without accidentally queuing them.
 const PLAY_YOUTUBE_URL_RE =
-  /\bplay\s+((?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=[\w-]+(?:[&?][\w=&%.-]*)?|youtu\.be\/[\w-]+(?:\?[\w=&%.-]*)?|youtube\.com\/shorts\/[\w-]+(?:\?[\w=&%.-]*)?))/gi;
+  /\bplay\s+((?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=[\w-]+(?:[&?][\w=&%.-]*)?|youtu\.be\/[\w-]+(?:\?[\w=&%.-]*)?|youtube\.com\/shorts\/[\w-]+(?:\?[\w=&%.-]*)?))(?:\s+for\s+(.+?))?$/gim;
 
 function extractYoutubeUrls(text) {
-  if (!text) return [];
+  if (!text) return { urls: [], dedication: undefined };
   const urls = [];
+  let dedication;
   for (const match of text.matchAll(PLAY_YOUTUBE_URL_RE)) {
     const url = match[1];
     urls.push(url.startsWith("http") ? url : `https://${url}`);
+    if (!dedication && match[2]) {
+      dedication = match[2].trim().slice(0, 100) || undefined;
+    }
   }
-  return [...new Set(urls)];
+  return { urls: [...new Set(urls)], dedication };
 }
 
-async function enqueueUrls(urls, { asAdmin = false, requesterId } = {}) {
+async function enqueueUrls(urls, { asAdmin = false, requesterId, dedication } = {}) {
   const headers = { "Content-Type": "application/json", "X-Source": "telegram" };
   if (requesterId) {
     headers["X-Requester-Id"] = requesterId;
@@ -113,10 +120,13 @@ async function enqueueUrls(urls, { asAdmin = false, requesterId } = {}) {
     headers.Authorization = `Basic ${token}`;
   }
 
+  const body = { urls };
+  if (dedication) body.dedication = dedication;
+
   const res = await fetch(ENQUEUE_URL, {
     method: "POST",
     headers,
-    body: JSON.stringify({ urls }),
+    body: JSON.stringify(body),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -147,6 +157,24 @@ bot.getMe().then((me) => {
   console.log(`Telegram bridge connected as @${me.username}. Forwarding YouTube links to ${ENQUEUE_URL}`);
 });
 
+// Poll every 10s for admin replies to deliver to blocked users
+setInterval(async () => {
+  try {
+    const res = await fetch(`${BASE_URL}/messages/outbox?source=telegram`);
+    if (!res.ok) return;
+    const data = await res.json();
+    for (const reply of data.replies || []) {
+      try {
+        await bot.sendMessage(reply.requester_id, `📩 Message from admin:\n\n${reply.text}`);
+        await fetch(`${BASE_URL}/messages/outbox/${reply.id}/delivered`, { method: "POST" });
+        await logLine(`REPLY delivered telegram_id=${reply.requester_id}`);
+      } catch (err) {
+        await logLine(`REPLY failed telegram_id=${reply.requester_id} error="${err.message}"`);
+      }
+    }
+  } catch (_) {}
+}, 10000);
+
 // Poll every 5s to notify requesters when their song starts playing
 setInterval(async () => {
   if (pendingNotifications.size === 0) return;
@@ -167,6 +195,35 @@ bot.on("message", async (msg) => {
   const text = msg.text || "";
   const chatId = msg.chat.id;
 
+  // Check if this user has a pending appeal window
+  const appeal = pendingAppeals.get(chatId);
+  if (appeal && Date.now() < appeal.expiresAt) {
+    const appealText = (text || "").trim().slice(0, 400);
+    if (!appealText) return;
+    pendingAppeals.delete(chatId);
+    try {
+      const appealRes = await fetch(`${BASE_URL}/messages/appeal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "telegram",
+          requester_id: appeal.senderId,
+          text: appealText,
+        }),
+      });
+      if (appealRes.ok) {
+        await bot.sendMessage(chatId, "✅ Your message has been sent to the admin. Please wait for their response.");
+      } else {
+        await bot.sendMessage(chatId, "❌ Could not send your message. Server error.");
+      }
+    } catch (_) {
+      await bot.sendMessage(chatId, "❌ Could not send your message. Please try again later.");
+    }
+    return;
+  }
+  // Expired appeal — clean up
+  if (appeal) pendingAppeals.delete(chatId);
+
   // Status commands: "status", "queue", "wait" (with or without leading "/")
   if (STATUS_COMMAND_RE.test(text)) {
     const reply = await handleStatusCommand();
@@ -174,18 +231,24 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  const urls = extractYoutubeUrls(text);
+  const { urls, dedication } = extractYoutubeUrls(text);
   if (urls.length === 0) return; // silently ignore messages with no "play <link>"
 
   const senderId = String(msg.from?.id || "");
   const asAdmin = ADMIN_TELEGRAM_IDS.includes(senderId);
 
   for (const url of urls) {
-    await logLine(`REQUEST telegram_id=${senderId} admin=${asAdmin} url=${url}`);
+    await logLine(`REQUEST telegram_id=${senderId} admin=${asAdmin} url=${url}${dedication ? ` dedication="${dedication}"` : ""}`);
   }
 
   try {
-    const data = await enqueueUrls(urls, { asAdmin, requesterId: senderId });
+    const data = await enqueueUrls(urls, { asAdmin, requesterId: senderId, dedication });
+
+    // Check if any rejection is a blocked-user message
+    const blockedRej = (data.rejected || []).find((r) => r.reason && r.reason.startsWith("BLOCKED:"));
+    if (blockedRej) {
+      pendingAppeals.set(chatId, { senderId, expiresAt: Date.now() + 10 * 60 * 1000 });
+    }
 
     for (const song of data.enqueued || []) {
       await logLine(

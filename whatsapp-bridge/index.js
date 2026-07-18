@@ -52,6 +52,11 @@ const ADMIN_PHONE_NUMBERS = (process.env.ADMIN_PHONE_NUMBERS || "")
 // Pending play notifications: song_id -> { jid, title }
 const pendingNotifications = new Map();
 
+// Blocked-user appeal: jid -> { phone, expiresAt }
+// After a blocked user gets the rejection message, their NEXT message
+// (within 10 minutes) is forwarded to the admin as an appeal.
+const pendingAppeals = new Map();
+
 // Status command: reply with now-playing + queue info
 const STATUS_COMMAND_RE = /^\s*(status|queue|wait)\s*$/i;
 
@@ -88,16 +93,20 @@ async function handleStatusCommand() {
 // that just contain a bare link with no "play" in front are ignored, so
 // people can share YouTube links in chat without accidentally queuing them.
 const PLAY_YOUTUBE_URL_RE =
-  /\bplay\s+((?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=[\w-]+(?:[&?][\w=&%.-]*)?|youtu\.be\/[\w-]+(?:\?[\w=&%.-]*)?|youtube\.com\/shorts\/[\w-]+(?:\?[\w=&%.-]*)?))/gi;
+  /\bplay\s+((?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=[\w-]+(?:[&?][\w=&%.-]*)?|youtu\.be\/[\w-]+(?:\?[\w=&%.-]*)?|youtube\.com\/shorts\/[\w-]+(?:\?[\w=&%.-]*)?))(?:\s+for\s+(.+?))?$/gim;
 
 function extractYoutubeUrls(text) {
-  if (!text) return [];
+  if (!text) return { urls: [], dedication: undefined };
   const urls = [];
+  let dedication;
   for (const match of text.matchAll(PLAY_YOUTUBE_URL_RE)) {
     const url = match[1];
     urls.push(url.startsWith("http") ? url : `https://${url}`);
+    if (!dedication && match[2]) {
+      dedication = match[2].trim().slice(0, 100) || undefined;
+    }
   }
-  return [...new Set(urls)];
+  return { urls: [...new Set(urls)], dedication };
 }
 
 function digitsOnly(jid) {
@@ -128,7 +137,7 @@ async function senderPhoneNumber(sock, msg) {
   return digitsOnly(jid);
 }
 
-async function enqueueUrls(urls, { asAdmin = false, requesterId } = {}) {
+async function enqueueUrls(urls, { asAdmin = false, requesterId, dedication } = {}) {
   const headers = { "Content-Type": "application/json", "X-Source": "whatsapp" };
   if (requesterId) {
     headers["X-Requester-Id"] = requesterId;
@@ -143,10 +152,13 @@ async function enqueueUrls(urls, { asAdmin = false, requesterId } = {}) {
     headers.Authorization = `Basic ${token}`;
   }
 
+  const body = { urls };
+  if (dedication) body.dedication = dedication;
+
   const res = await fetch(ENQUEUE_URL, {
     method: "POST",
     headers,
-    body: JSON.stringify({ urls }),
+    body: JSON.stringify(body),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -208,6 +220,27 @@ async function start() {
     }
   });
 
+  // Poll every 10s for admin replies to deliver to blocked users
+  setInterval(async () => {
+    try {
+      const res = await fetch(`${BASE_URL}/messages/outbox?source=whatsapp`);
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const reply of data.replies || []) {
+        const targetJid = `${reply.requester_id}@s.whatsapp.net`;
+        try {
+          await sock.sendMessage(targetJid, {
+            text: `📩 Message from admin:\n\n${reply.text}`,
+          });
+          await fetch(`${BASE_URL}/messages/outbox/${reply.id}/delivered`, { method: "POST" });
+          await logLine(`REPLY delivered phone=${reply.requester_id}`);
+        } catch (err) {
+          await logLine(`REPLY failed phone=${reply.requester_id} error="${err.message}"`);
+        }
+      }
+    } catch (_) {}
+  }, 10000);
+
   // Poll every 5s to notify requesters when their song starts playing
   setInterval(async () => {
     if (pendingNotifications.size === 0) return;
@@ -236,6 +269,53 @@ async function start() {
       const text =
         msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
+      // Check if this user has a pending appeal window
+      await logLine(`APPEAL_DEBUG jid=${jid} pendingAppeals=[${[...pendingAppeals.keys()].join(",")}] text="${text.slice(0, 50)}"`);
+      const appeal = pendingAppeals.get(jid);
+      if (appeal && Date.now() < appeal.expiresAt) {
+        const appealText = (text || "").trim().slice(0, 400);
+        if (!appealText) {
+          await logLine(`APPEAL_SKIP_EMPTY jid=${jid} — ignoring empty message (likely link preview)`);
+          continue;
+        }
+        pendingAppeals.delete(jid);
+        await logLine(`APPEAL_MATCH jid=${jid} phone=${appeal.phone} appealText="${appealText.slice(0, 50)}"`);
+        try {
+          const appealRes = await fetch(`${BASE_URL}/messages/appeal`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              source: "whatsapp",
+              requester_id: appeal.phone,
+              text: appealText,
+            }),
+          });
+          await logLine(`APPEAL_RESPONSE status=${appealRes.status}`);
+          if (appealRes.ok) {
+            await sock.sendMessage(jid, {
+              text: "✅ Your message has been sent to the admin. Please wait for their response.",
+            });
+          } else {
+            const errBody = await appealRes.text();
+            await logLine(`APPEAL_ERROR body=${errBody}`);
+            await sock.sendMessage(jid, {
+              text: "❌ Could not send your message. Server error.",
+            });
+          }
+        } catch (err) {
+          await logLine(`APPEAL_FETCH_ERROR error="${err.message}"`);
+          await sock.sendMessage(jid, {
+            text: "❌ Could not send your message. Please try again later.",
+          });
+        }
+        continue;
+      }
+      // Expired appeal — clean up
+      if (appeal) {
+        await logLine(`APPEAL_EXPIRED jid=${jid}`);
+        pendingAppeals.delete(jid);
+      }
+
       // Status commands: "status", "queue", "wait"
       if (STATUS_COMMAND_RE.test(text)) {
         const reply = await handleStatusCommand();
@@ -243,18 +323,25 @@ async function start() {
         continue;
       }
 
-      const urls = extractYoutubeUrls(text);
+      const { urls, dedication } = extractYoutubeUrls(text);
       if (urls.length === 0) continue; // silently ignore messages with no "play <link>"
 
       const number = await senderPhoneNumber(sock, msg);
       const asAdmin = ADMIN_PHONE_NUMBERS.some((admin) => number.includes(admin));
 
       for (const url of urls) {
-        await logLine(`REQUEST phone=${number} admin=${asAdmin} url=${url}`);
+        await logLine(`REQUEST phone=${number} admin=${asAdmin} url=${url}${dedication ? ` dedication="${dedication}"` : ""}`);
       }
 
       try {
-        const data = await enqueueUrls(urls, { asAdmin, requesterId: number });
+        const data = await enqueueUrls(urls, { asAdmin, requesterId: number, dedication });
+
+        // Check if any rejection is a blocked-user message
+        const blockedRej = (data.rejected || []).find((r) => r.reason && r.reason.startsWith("BLOCKED:"));
+        if (blockedRej) {
+          pendingAppeals.set(jid, { phone: number, expiresAt: Date.now() + 10 * 60 * 1000 });
+          await logLine(`APPEAL_WINDOW_SET jid=${jid} phone=${number}`);
+        }
 
         for (const song of data.enqueued || []) {
           await logLine(

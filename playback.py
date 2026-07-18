@@ -159,6 +159,8 @@ def set_volume(level: float) -> None:
         f.write(str(level))
 
 
+
+
 # ---------------------------------------------------------------------------
 # Playback
 # ---------------------------------------------------------------------------
@@ -306,49 +308,56 @@ def play_youtube_audio(
                     logger.info("Seeked to %.1fs for %s", seek_target, youtube_url)
                     continue
 
-                # --- Volume change -----------------------------------------
+                # --- Volume change (debounced) ---------------------------------
                 new_volume = get_volume()
                 if abs(new_volume - _current_volume) > 0.01:
-                    # Compute where we are in the song right now
+                    # Wait until volume is stable for 400ms before restarting
+                    _vol_last_seen = new_volume
+                    _vol_stable_since = time.time()
+                    while True:
+                        time.sleep(0.1)
+                        check = get_volume()
+                        if abs(check - _vol_last_seen) > 0.005:
+                            _vol_last_seen = check
+                            _vol_stable_since = time.time()
+                        elif time.time() - _vol_stable_since >= 0.4:
+                            break
+
+                    new_volume = _vol_last_seen
+                    if abs(new_volume - _current_volume) <= 0.01:
+                        continue
+
                     current_elapsed = _ffplay_seek_offset + (time.time() - _ffplay_start)
-
-                    # Kill old process (resume first if paused so psutil is happy)
                     was_paused = _paused
-                    if _paused:
-                        try:
-                            psutil.Process(process.pid).resume()
-                        except psutil.NoSuchProcess:
-                            pass
-                        _paused = False
 
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-
+                    old_process = process
                     _current_volume = new_volume
                     _ffplay_seek_offset = current_elapsed
                     _ffplay_start = time.time()
-
                     process = _start_ffplay(current_elapsed, _current_volume)
-                    logger.info("Volume changed to %.2f, restarted at %.1fs", new_volume, current_elapsed)
 
-                    # Re-apply pause if it was paused before
                     if was_paused:
-                        time.sleep(0.1)  # let ffplay initialise before suspending
+                        try:
+                            psutil.Process(old_process.pid).resume()
+                        except psutil.NoSuchProcess:
+                            pass
+                    old_process.terminate()
+                    try:
+                        old_process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        old_process.kill()
+                        old_process.wait()
+
+                    if was_paused:
+                        _paused = False
+                        time.sleep(0.1)
                         try:
                             psutil.Process(process.pid).suspend()
                         except psutil.NoSuchProcess:
                             pass
                         _paused = True
 
-                    # Notify seek listeners so queue_state stays accurate
-                    if on_seek:
-                        on_seek(current_elapsed)
-
-                    continue
+                    logger.info("Volume changed to %.2f at %.1fs", new_volume, current_elapsed)
 
                 # --- Crossfade: fire on_near_end once, near the natural end -
                 if not _near_end_fired and not _paused and duration and on_near_end:

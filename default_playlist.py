@@ -1,52 +1,20 @@
 """
 Admin-managed fallback playlists: named, looping lists of songs. Whichever
 one is marked active is what the consumer plays automatically whenever the
-real (Kafka-backed) queue is empty. Any real song that gets enqueued
-interrupts whatever default song is currently playing almost immediately —
-see the interrupt_check hookup in playback.py and its use in
-consumer_worker.py.
+real (Kafka-backed) queue is empty.
 
-Same file-based IPC approach as queue_state.py: simple, fine for a single
-local user, not safe under heavy concurrent writes.
+Uses SQLite (via db module) for persistent storage.
 """
 import json
-import os
 import random
 import string
-import threading
+import time
 from typing import List, Optional
 
-from config import settings
+import db
 
 _ID_ALPHABET = string.ascii_letters + string.digits
 _ID_LENGTH = 4
-
-_lock = threading.Lock()
-
-
-def _empty_state() -> dict:
-    return {"playlists": {}, "active_playlist_id": None, "now_playing": None}
-
-
-def _load() -> dict:
-    if not os.path.exists(settings.default_playlist_file):
-        return _empty_state()
-    try:
-        with open(settings.default_playlist_file, "r") as f:
-            data = json.load(f)
-            data.setdefault("playlists", {})
-            data.setdefault("active_playlist_id", None)
-            data.setdefault("now_playing", None)
-            return data
-    except (json.JSONDecodeError, OSError):
-        return _empty_state()
-
-
-def _save(data: dict) -> None:
-    tmp_path = settings.default_playlist_file + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(data, f)
-    os.replace(tmp_path, settings.default_playlist_file)
 
 
 def _generate_id(existing_ids) -> str:
@@ -58,256 +26,355 @@ def _generate_id(existing_ids) -> str:
 
 
 def create_playlist(name: str) -> dict:
-    with _lock:
-        data = _load()
-        playlist_id = _generate_id(data["playlists"].keys())
-        playlist = {"id": playlist_id, "name": name, "items": [], "next_index": 0}
-        data["playlists"][playlist_id] = playlist
-        # Not activated automatically — a playlist only plays once an admin
-        # explicitly activates it. No active playlist just means the
-        # consumer plays nothing while the real queue is empty.
-        _save(data)
-        return {"id": playlist_id, "name": name}
+    conn = db.get_conn()
+    existing_ids = [r[0] for r in conn.execute("SELECT id FROM playlists").fetchall()]
+    playlist_id = _generate_id(existing_ids)
+    conn.execute(
+        "INSERT INTO playlists (id, name, next_index) VALUES (?,?,0)",
+        (playlist_id, name),
+    )
+    return {"id": playlist_id, "name": name}
 
 
 def list_playlists() -> List[dict]:
-    with _lock:
-        data = _load()
-        active_id = data["active_playlist_id"]
-        return [
-            {
-                "id": playlist["id"],
-                "name": playlist["name"],
-                "song_count": len(playlist["items"]),
-                "is_active": playlist["id"] == active_id,
-            }
-            for playlist in data["playlists"].values()
-        ]
+    conn = db.get_conn()
+    active_row = conn.execute(
+        "SELECT value FROM app_state WHERE key='active_playlist_id'"
+    ).fetchone()
+    active_id = active_row["value"] if active_row else None
+
+    rows = conn.execute("SELECT id, name FROM playlists").fetchall()
+    result = []
+    for r in rows:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM playlist_songs WHERE playlist_id=?", (r["id"],)
+        ).fetchone()[0]
+        result.append({
+            "id": r["id"],
+            "name": r["name"],
+            "song_count": count,
+            "is_active": r["id"] == active_id,
+        })
+    return result
 
 
 def delete_playlist(playlist_id: str) -> bool:
-    with _lock:
-        data = _load()
-        if playlist_id not in data["playlists"]:
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT id FROM playlists WHERE id=?", (playlist_id,)
+        ).fetchone()
+        if row is None:
             return False
-        del data["playlists"][playlist_id]
-        if data["active_playlist_id"] == playlist_id:
-            data["active_playlist_id"] = None
-        _save(data)
-        return True
+        conn.execute("DELETE FROM playlists WHERE id=?", (playlist_id,))
+        active_row = conn.execute(
+            "SELECT value FROM app_state WHERE key='active_playlist_id'"
+        ).fetchone()
+        if active_row and active_row["value"] == playlist_id:
+            conn.execute("DELETE FROM app_state WHERE key='active_playlist_id'")
+    return True
 
 
 def set_active_playlist(playlist_id: str) -> bool:
-    with _lock:
-        data = _load()
-        if playlist_id not in data["playlists"]:
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT id FROM playlists WHERE id=?", (playlist_id,)
+        ).fetchone()
+        if row is None:
             return False
-        data["active_playlist_id"] = playlist_id
-        _save(data)
-        return True
+        conn.execute(
+            "INSERT OR REPLACE INTO app_state (key, value) "
+            "VALUES ('active_playlist_id', ?)",
+            (playlist_id,),
+        )
+    return True
 
 
 def deactivate_playlist(playlist_id: str) -> bool:
-    """Clears the active playlist, but only if playlist_id is actually the active one."""
-    with _lock:
-        data = _load()
-        if data["active_playlist_id"] != playlist_id:
+    with db.transaction() as conn:
+        active_row = conn.execute(
+            "SELECT value FROM app_state WHERE key='active_playlist_id'"
+        ).fetchone()
+        if not active_row or active_row["value"] != playlist_id:
             return False
-        data["active_playlist_id"] = None
-        _save(data)
-        return True
+        conn.execute("DELETE FROM app_state WHERE key='active_playlist_id'")
+    return True
 
 
 def get_active_playlist() -> Optional[dict]:
-    with _lock:
-        data = _load()
-        active_id = data["active_playlist_id"]
-        if active_id is None or active_id not in data["playlists"]:
-            return None
-        playlist = data["playlists"][active_id]
-        return {"id": playlist["id"], "name": playlist["name"]}
+    conn = db.get_conn()
+    active_row = conn.execute(
+        "SELECT value FROM app_state WHERE key='active_playlist_id'"
+    ).fetchone()
+    if not active_row:
+        return None
+    row = conn.execute(
+        "SELECT id, name FROM playlists WHERE id=?", (active_row["value"],)
+    ).fetchone()
+    if row is None:
+        return None
+    return {"id": row["id"], "name": row["name"]}
 
 
 def list_songs(playlist_id: str) -> Optional[List[dict]]:
-    with _lock:
-        data = _load()
-        playlist = data["playlists"].get(playlist_id)
-        if playlist is None:
-            return None
-        return list(playlist["items"])
+    conn = db.get_conn()
+    row = conn.execute(
+        "SELECT id FROM playlists WHERE id=?", (playlist_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    songs = conn.execute(
+        "SELECT id, url, title, uploader, duration FROM playlist_songs "
+        "WHERE playlist_id=? ORDER BY position",
+        (playlist_id,),
+    ).fetchall()
+    return [dict(s) for s in songs]
 
 
 def add_song(
-    playlist_id: str, url: str, title: Optional[str], uploader: Optional[str], duration: Optional[float]
+    playlist_id: str,
+    url: str,
+    title: Optional[str],
+    uploader: Optional[str],
+    duration: Optional[float],
 ) -> Optional[dict]:
-    with _lock:
-        data = _load()
-        playlist = data["playlists"].get(playlist_id)
-        if playlist is None:
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT id FROM playlists WHERE id=?", (playlist_id,)
+        ).fetchone()
+        if row is None:
             return None
-        # Dedup by URL: don't allow the same song twice in the same playlist
-        for existing in playlist["items"]:
-            if existing.get("url") == url:
-                return {"duplicate": True, "url": url, "title": existing.get("title")}
-        existing_song_ids = {item["id"] for item in playlist["items"]}
-        item = {
-            "id": _generate_id(existing_song_ids),
-            "url": url,
-            "title": title,
-            "uploader": uploader,
-            "duration": duration,
-        }
-        playlist["items"].append(item)
-        _save(data)
-        return item
+        dup = conn.execute(
+            "SELECT title FROM playlist_songs WHERE playlist_id=? AND url=?",
+            (playlist_id, url),
+        ).fetchone()
+        if dup:
+            return {"duplicate": True, "url": url, "title": dup["title"]}
+
+        existing_ids = [
+            r[0] for r in conn.execute(
+                "SELECT id FROM playlist_songs WHERE playlist_id=?", (playlist_id,)
+            ).fetchall()
+        ]
+        song_id = _generate_id(existing_ids)
+
+        max_pos = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) FROM playlist_songs "
+            "WHERE playlist_id=?",
+            (playlist_id,),
+        ).fetchone()[0]
+
+        conn.execute(
+            "INSERT INTO playlist_songs "
+            "(id, playlist_id, url, title, uploader, duration, position) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (song_id, playlist_id, url, title, uploader, duration, max_pos + 1),
+        )
+    return {
+        "id": song_id, "url": url, "title": title,
+        "uploader": uploader, "duration": duration,
+    }
 
 
 def remove_song(playlist_id: str, song_id: str) -> bool:
-    with _lock:
-        data = _load()
-        playlist = data["playlists"].get(playlist_id)
-        if playlist is None:
+    with db.transaction() as conn:
+        cursor = conn.execute(
+            "DELETE FROM playlist_songs WHERE id=? AND playlist_id=?",
+            (song_id, playlist_id),
+        )
+        if cursor.rowcount == 0:
             return False
-        before = len(playlist["items"])
-        playlist["items"] = [item for item in playlist["items"] if item["id"] != song_id]
-        if len(playlist["items"]) == before:
-            return False
-        if playlist["items"]:
-            playlist["next_index"] = playlist["next_index"] % len(playlist["items"])
+        count = conn.execute(
+            "SELECT COUNT(*) FROM playlist_songs WHERE playlist_id=?",
+            (playlist_id,),
+        ).fetchone()[0]
+        if count > 0:
+            pl = conn.execute(
+                "SELECT next_index FROM playlists WHERE id=?", (playlist_id,)
+            ).fetchone()
+            if pl:
+                conn.execute(
+                    "UPDATE playlists SET next_index=? WHERE id=?",
+                    (pl["next_index"] % count, playlist_id),
+                )
         else:
-            playlist["next_index"] = 0
-        _save(data)
-        return True
+            conn.execute(
+                "UPDATE playlists SET next_index=0 WHERE id=?", (playlist_id,)
+            )
+    return True
 
 
 def next_song() -> Optional[dict]:
-    """
-    Returns the next song from the active playlist in round-robin order and
-    advances its pointer, wrapping back to the start once the end is
-    reached. None if there's no active playlist, or it's empty.
-    """
-    with _lock:
-        data = _load()
-        active_id = data["active_playlist_id"]
-        if active_id is None or active_id not in data["playlists"]:
+    with db.transaction() as conn:
+        active_row = conn.execute(
+            "SELECT value FROM app_state WHERE key='active_playlist_id'"
+        ).fetchone()
+        if not active_row:
             return None
-        playlist = data["playlists"][active_id]
-        items = playlist["items"]
-        if not items:
+        playlist_id = active_row["value"]
+
+        pl = conn.execute(
+            "SELECT next_index FROM playlists WHERE id=?", (playlist_id,)
+        ).fetchone()
+        if pl is None:
             return None
-        index = playlist["next_index"] % len(items)
-        song = items[index]
-        playlist["next_index"] = (index + 1) % len(items)
-        _save(data)
-        return song
+
+        songs = conn.execute(
+            "SELECT id, url, title, uploader, duration FROM playlist_songs "
+            "WHERE playlist_id=? ORDER BY position",
+            (playlist_id,),
+        ).fetchall()
+        if not songs:
+            return None
+
+        index = pl["next_index"] % len(songs)
+        song = dict(songs[index])
+        conn.execute(
+            "UPDATE playlists SET next_index=? WHERE id=?",
+            ((index + 1) % len(songs), playlist_id),
+        )
+    return song
 
 
 def peek_next_song() -> Optional[dict]:
-    """
-    Like next_song(), but doesn't advance the pointer — for display purposes
-    (e.g. "up next" on the UI) without disturbing actual playback order.
-    """
-    with _lock:
-        data = _load()
-        active_id = data["active_playlist_id"]
-        if active_id is None or active_id not in data["playlists"]:
-            return None
-        playlist = data["playlists"][active_id]
-        items = playlist["items"]
-        if not items:
-            return None
-        return items[playlist["next_index"] % len(items)]
+    conn = db.get_conn()
+    active_row = conn.execute(
+        "SELECT value FROM app_state WHERE key='active_playlist_id'"
+    ).fetchone()
+    if not active_row:
+        return None
+    playlist_id = active_row["value"]
+
+    pl = conn.execute(
+        "SELECT next_index FROM playlists WHERE id=?", (playlist_id,)
+    ).fetchone()
+    if pl is None:
+        return None
+
+    songs = conn.execute(
+        "SELECT id, url, title, uploader, duration FROM playlist_songs "
+        "WHERE playlist_id=? ORDER BY position",
+        (playlist_id,),
+    ).fetchall()
+    if not songs:
+        return None
+
+    return dict(songs[pl["next_index"] % len(songs)])
 
 
 def set_now_playing(song: dict) -> None:
-    """Called by the consumer right before it starts playing a default-playlist song."""
-    import time as _time
-    with _lock:
-        data = _load()
-        data["now_playing"] = {
-            "id": song["id"],
-            "url": song["url"],
-            "title": song.get("title"),
-            "uploader": song.get("uploader"),
-            "duration": song.get("duration"),
-            "started_at": _time.time(),
-            "seek_offset": 0,
-            "paused_duration": 0,
-            "paused_at": None,
-        }
-        _save(data)
+    now_playing = {
+        "id": song["id"],
+        "url": song["url"],
+        "title": song.get("title"),
+        "uploader": song.get("uploader"),
+        "duration": song.get("duration"),
+        "started_at": time.time(),
+        "seek_offset": 0,
+        "paused_duration": 0,
+        "paused_at": None,
+    }
+    conn = db.get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO app_state (key, value) "
+        "VALUES ('default_playlist_now_playing', ?)",
+        (json.dumps(now_playing),),
+    )
+
+
+def _get_now_playing_data(conn) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT value FROM app_state WHERE key='default_playlist_now_playing'"
+    ).fetchone()
+    if not row or not row["value"]:
+        return None
+    try:
+        return json.loads(row["value"])
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def mark_now_playing_paused() -> None:
-    import time as _time
-    with _lock:
-        data = _load()
-        np = data.get("now_playing")
+    with db.transaction() as conn:
+        np = _get_now_playing_data(conn)
         if np and np.get("paused_at") is None:
-            np["paused_at"] = _time.time()
-            _save(data)
+            np["paused_at"] = time.time()
+            conn.execute(
+                "UPDATE app_state SET value=? "
+                "WHERE key='default_playlist_now_playing'",
+                (json.dumps(np),),
+            )
 
 
 def mark_now_playing_resumed() -> None:
-    import time as _time
-    with _lock:
-        data = _load()
-        np = data.get("now_playing")
+    with db.transaction() as conn:
+        np = _get_now_playing_data(conn)
         if np and np.get("paused_at") is not None:
             np["paused_duration"] = (np.get("paused_duration") or 0) + (
-                _time.time() - np["paused_at"]
+                time.time() - np["paused_at"]
             )
             np["paused_at"] = None
-            _save(data)
+            conn.execute(
+                "UPDATE app_state SET value=? "
+                "WHERE key='default_playlist_now_playing'",
+                (json.dumps(np),),
+            )
 
 
 def mark_now_playing_seeked(offset: float) -> None:
-    import time as _time
-    with _lock:
-        data = _load()
-        np = data.get("now_playing")
+    with db.transaction() as conn:
+        np = _get_now_playing_data(conn)
         if np:
             np["seek_offset"] = offset
-            np["started_at"] = _time.time()
+            np["started_at"] = time.time()
             np["paused_duration"] = 0
             np["paused_at"] = None
-            _save(data)
+            conn.execute(
+                "UPDATE app_state SET value=? "
+                "WHERE key='default_playlist_now_playing'",
+                (json.dumps(np),),
+            )
 
 
 def clear_now_playing() -> None:
-    """Called by the consumer once a default-playlist song stops playing, however it stopped."""
-    with _lock:
-        data = _load()
-        data["now_playing"] = None
-        _save(data)
+    conn = db.get_conn()
+    conn.execute("DELETE FROM app_state WHERE key='default_playlist_now_playing'")
 
 
 def reorder_songs(playlist_id: str, ordered_ids: List[str]) -> bool:
-    """
-    Reorders a playlist's songs to match the given list of song IDs.
-    IDs not present in the playlist are ignored; any existing songs not
-    in ordered_ids are appended at the end (safety net for partial lists).
-    Returns False if the playlist doesn't exist.
-    """
-    with _lock:
-        data = _load()
-        playlist = data["playlists"].get(playlist_id)
-        if playlist is None:
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT id, next_index FROM playlists WHERE id=?", (playlist_id,)
+        ).fetchone()
+        if row is None:
             return False
-        items_by_id = {item["id"]: item for item in playlist["items"]}
-        # Build reordered list from the provided IDs, skip unknown IDs
-        new_items = [items_by_id[sid] for sid in ordered_ids if sid in items_by_id]
-        # Append any existing songs not mentioned (safety net)
-        included = {sid for sid in ordered_ids if sid in items_by_id}
-        for item in playlist["items"]:
-            if item["id"] not in included:
-                new_items.append(item)
-        playlist["items"] = new_items
-        playlist["next_index"] = playlist["next_index"] % len(new_items) if new_items else 0
-        _save(data)
-        return True
+
+        songs = conn.execute(
+            "SELECT id FROM playlist_songs WHERE playlist_id=? ORDER BY position",
+            (playlist_id,),
+        ).fetchall()
+        song_ids = {r["id"] for r in songs}
+
+        new_order = [sid for sid in ordered_ids if sid in song_ids]
+        included = set(new_order)
+        for s in songs:
+            if s["id"] not in included:
+                new_order.append(s["id"])
+
+        for i, sid in enumerate(new_order):
+            conn.execute(
+                "UPDATE playlist_songs SET position=? "
+                "WHERE id=? AND playlist_id=?",
+                (i, sid, playlist_id),
+            )
+
+        if new_order:
+            conn.execute(
+                "UPDATE playlists SET next_index=? WHERE id=?",
+                (row["next_index"] % len(new_order), playlist_id),
+            )
+    return True
 
 
 def get_now_playing() -> Optional[dict]:
-    with _lock:
-        return _load()["now_playing"]
+    conn = db.get_conn()
+    return _get_now_playing_data(conn)

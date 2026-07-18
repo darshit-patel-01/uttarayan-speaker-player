@@ -72,13 +72,17 @@ logger = logging.getLogger("consumer_worker")
 # Voice: hi-IN-SwaraNeural (warm female Hindi voice).
 # rate="+25%" and pitch="+8Hz" give it an upbeat, energetic feel.
 # ---------------------------------------------------------------------------
-def _tts_announce(title: str) -> None:
+def _tts_announce(title: str, dedication: str = None) -> None:
     import asyncio
     import edge_tts
 
     async def _generate(path: str) -> None:
+        if dedication:
+            tts_text = f"{dedication} के लिए अगला गाना है… {title}!"
+        else:
+            tts_text = f"अगला गाना है… {title}!"
         communicate = edge_tts.Communicate(
-            text=f"अगला गाना है… {title}!",
+            text=tts_text,
             voice="hi-IN-SwaraNeural",
             rate="-10%",
             pitch="+8Hz",
@@ -104,11 +108,14 @@ def _tts_announce(title: str) -> None:
                 pass
 
 
-def _tts_announce_async(title: str) -> None:
+def _tts_announce_async(title: str, dedication: str = None) -> None:
     """Fire-and-forget variant for crossfading: runs _tts_announce on a
     background thread so it can overlap the tail of the still-playing
     current song instead of blocking the main playback loop."""
-    threading.Thread(target=_tts_announce, args=(title,), daemon=True, name="tts-crossfade").start()
+    threading.Thread(
+        target=_tts_announce, args=(title, dedication),
+        daemon=True, name="tts-crossfade",
+    ).start()
 
 
 def _announce_upcoming(current_song_id: str):
@@ -128,7 +135,10 @@ def _announce_upcoming(current_song_id: str):
                 "Crossfade: announcing upcoming id=%s during tail of id=%s",
                 upcoming["id"], current_song_id,
             )
-            _tts_announce_async(upcoming.get("title") or "the next song")
+            _tts_announce_async(
+                upcoming.get("title") or "the next song",
+                upcoming.get("dedication"),
+            )
     return _fire
 
 
@@ -267,7 +277,10 @@ def main():
             # playlist, or after a reorder that skipped past it).
             global _last_announced_song_id
             if song_id != _last_announced_song_id:
-                _tts_announce(next_item.get("title") or "the next song")
+                _tts_announce(
+                    next_item.get("title") or "the next song",
+                    next_item.get("dedication"),
+                )
             _last_announced_song_id = None
 
             # Start pre-fetching the next queued song while this one plays

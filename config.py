@@ -146,5 +146,12 @@ class Settings:
     # Cap on retained events so the file can't grow without bound.
     analytics_max_events: int = int(os.getenv("ANALYTICS_MAX_EVENTS", "5000"))
 
+    # SQLite database file — replaces all the JSON files above for storage.
+    # The old JSON file paths are kept for one-time migration on first run.
+    db_file: str = os.getenv(
+        "DB_FILE",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "uttarayan.db"),
+    )
+
 
 settings = Settings()

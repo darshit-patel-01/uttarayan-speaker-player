@@ -12,3 +12,9 @@ venv
 .analytics.json
 .runtime_config.json
 .env
+uttarayan.db
+uttarayan.db-wal
+uttarayan.db-shm
+.messages.json
+.outbox.json
+.history.json

@@ -1,27 +1,19 @@
 """
 Admin-tunable settings, overlaid on top of the env-backed defaults in
-config.py and persisted to a small JSON file so BOTH processes — the API
+config.py and persisted to SQLite so BOTH processes — the API
 (producer_api) and the player (consumer_worker) — pick up changes live,
 without a restart.
 
-Each tunable is read fresh from the file at the point of use (per request in
-the API, per song in the consumer), so an admin edit in the Settings tab
-takes effect on the next request / next song. The file only stores keys the
-admin has actually overridden; everything else falls through to the config.py
-default.
+Each tunable is read fresh from the database at the point of use (per
+request in the API, per song in the consumer), so an admin edit in the
+Settings tab takes effect on the next request / next song.
 """
 import json
-import os
-import threading
 from typing import Any, Optional
 
+import db
 from config import settings
 
-_lock = threading.Lock()
-
-# key -> UI/validation metadata. `default` is pulled live from settings so the
-# env value is always the fallback. Keep keys identical to Settings attribute
-# names so get()/reset() can fall through to getattr(settings, key).
 SPEC: dict = {
     "rate_limit_max_songs": {
         "type": "int", "min": 1, "max": 100, "unit": "songs",
@@ -61,30 +53,15 @@ SPEC: dict = {
 }
 
 
-def _load() -> dict:
-    if not os.path.exists(settings.runtime_config_file):
-        return {}
-    try:
-        with open(settings.runtime_config_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _save(data: dict) -> None:
-    tmp_path = settings.runtime_config_file + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp_path, settings.runtime_config_file)
-
-
 def get(key: str) -> Any:
     """Effective value for `key`: the admin override if set, else the
     env/config.py default."""
-    overrides = _load()
-    if key in overrides:
-        return overrides[key]
+    conn = db.get_conn()
+    row = conn.execute(
+        "SELECT value FROM runtime_config WHERE key=?", (key,)
+    ).fetchone()
+    if row:
+        return json.loads(row["value"])
     return getattr(settings, key)
 
 
@@ -96,7 +73,11 @@ def _coerce(key: str, value: Any) -> Any:
     elif t == "float":
         coerced = float(value)
     elif t == "bool":
-        coerced = value.strip().lower() in ("1", "true", "yes", "on") if isinstance(value, str) else bool(value)
+        coerced = (
+            value.strip().lower() in ("1", "true", "yes", "on")
+            if isinstance(value, str)
+            else bool(value)
+        )
     else:
         raise ValueError(f"Unknown type for {key}")
     if t in ("int", "float"):
@@ -117,29 +98,33 @@ def update(changes: dict) -> dict:
         if key not in SPEC:
             raise ValueError(f"Unknown setting: {key}")
         coerced[key] = _coerce(key, value)
-    with _lock:
-        overrides = _load()
-        overrides.update(coerced)
-        _save(overrides)
+    with db.transaction() as conn:
+        for key, value in coerced.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO runtime_config (key, value) VALUES (?,?)",
+                (key, json.dumps(value)),
+            )
     return get_all()
 
 
 def reset(key: Optional[str] = None) -> dict:
     """Drop one override (back to its default), or all when key is None."""
-    with _lock:
-        if key is None:
-            _save({})
-        else:
-            overrides = _load()
-            overrides.pop(key, None)
-            _save(overrides)
+    conn = db.get_conn()
+    if key is None:
+        conn.execute("DELETE FROM runtime_config")
+    else:
+        conn.execute("DELETE FROM runtime_config WHERE key=?", (key,))
     return get_all()
 
 
 def get_all() -> dict:
     """Every tunable with its current value, default, override flag, and UI
     metadata — for GET /config and the Settings tab."""
-    overrides = _load()
+    conn = db.get_conn()
+    overrides = {}
+    for row in conn.execute("SELECT key, value FROM runtime_config").fetchall():
+        overrides[row["key"]] = json.loads(row["value"])
+
     result = {}
     for key, meta in SPEC.items():
         default = getattr(settings, key)

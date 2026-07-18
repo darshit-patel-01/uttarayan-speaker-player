@@ -2,73 +2,43 @@
 Append-only play-analytics log powering the admin dashboard.
 
 One event is recorded the moment a real-queue song starts playing (from
-queue_state.mark_playing — the same hook that writes history, but unlike
-history this log is NOT deduped: every play is its own event, which is what
-lets us count "most-requested song" and "who requested the most"). Default-
-playlist songs are not recorded — they aren't anyone's request.
+queue_state.mark_playing). Default-playlist songs are not recorded.
 
-Same file-based IPC pattern as queue_state.py / default_playlist.py: written
-by the consumer process (mark_playing), read by the API process (GET /stats).
-The file holds requester ids (which include phone numbers), so it's
-gitignored and only ever exposed through the admin-only /stats endpoint.
+Uses SQLite (via db module) for persistent storage.
 """
-import json
-import os
-import threading
 import time
 from collections import defaultdict
 from typing import Optional
 
+import db
 from config import settings
-
-_lock = threading.Lock()
-
-
-def _empty() -> dict:
-    return {"events": []}
-
-
-def _load() -> dict:
-    if not os.path.exists(settings.analytics_file):
-        return _empty()
-    try:
-        with open(settings.analytics_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            data.setdefault("events", [])
-            return data
-    except (json.JSONDecodeError, OSError):
-        return _empty()
-
-
-def _save(data: dict) -> None:
-    tmp_path = settings.analytics_file + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp_path, settings.analytics_file)
 
 
 def record_play(item: dict) -> None:
-    """Record one play. `item` is a queue_state song item (has url, video_id,
-    title, uploader, duration, source, requester_id)."""
-    with _lock:
-        data = _load()
-        data["events"].append({
-            "played_at": time.time(),
-            "video_id": item.get("video_id"),
-            "url": item.get("url"),
-            "title": item.get("title"),
-            "uploader": item.get("uploader"),
-            "duration": item.get("duration") or 0,
-            "source": item.get("source"),
-            "requester_id": item.get("requester_id"),
-        })
-        data["events"] = data["events"][-settings.analytics_max_events:]
-        _save(data)
+    """Record one play. `item` is a queue_state song item."""
+    conn = db.get_conn()
+    conn.execute(
+        "INSERT INTO analytics_events "
+        "(played_at, video_id, url, title, uploader, duration, source, requester_id) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (
+            time.time(), item.get("video_id"), item.get("url"),
+            item.get("title"), item.get("uploader"),
+            item.get("duration") or 0, item.get("source"),
+            item.get("requester_id"),
+        ),
+    )
+    count = conn.execute("SELECT COUNT(*) FROM analytics_events").fetchone()[0]
+    if count > settings.analytics_max_events:
+        excess = count - settings.analytics_max_events
+        conn.execute(
+            "DELETE FROM analytics_events WHERE id IN "
+            "(SELECT id FROM analytics_events ORDER BY id ASC LIMIT ?)",
+            (excess,),
+        )
 
 
 def _split_requester(requester_id: Optional[str]) -> dict:
-    """'whatsapp:15551234567' -> {source, value}. Unknown ids fall back to
-    source 'unknown'."""
     if not requester_id:
         return {"source": "unknown", "value": ""}
     source, _, value = requester_id.partition(":")
@@ -77,8 +47,10 @@ def _split_requester(requester_id: Optional[str]) -> dict:
 
 def get_stats(top_n: int = 10) -> dict:
     """Aggregates the event log into the numbers the dashboard shows."""
-    with _lock:
-        events = list(_load()["events"])
+    conn = db.get_conn()
+    events = [dict(r) for r in conn.execute(
+        "SELECT * FROM analytics_events"
+    ).fetchall()]
 
     total_plays = len(events)
     total_playtime = 0.0
@@ -104,11 +76,12 @@ def get_stats(top_n: int = 10) -> dict:
         video_id = e.get("video_id") or e.get("url")
         if video_id:
             song_counts[video_id] += 1
-            # Keep the latest-seen title/url for display.
             song_titles[video_id] = {"title": e.get("title"), "url": e.get("url")}
 
     top_requesters = []
-    for requester_id, count in sorted(requester_counts.items(), key=lambda kv: kv[1], reverse=True)[:top_n]:
+    for requester_id, count in sorted(
+        requester_counts.items(), key=lambda kv: kv[1], reverse=True
+    )[:top_n]:
         parts = _split_requester(requester_id)
         top_requesters.append({
             "source": parts["source"],
@@ -118,7 +91,9 @@ def get_stats(top_n: int = 10) -> dict:
         })
 
     top_songs = []
-    for video_id, count in sorted(song_counts.items(), key=lambda kv: kv[1], reverse=True)[:top_n]:
+    for video_id, count in sorted(
+        song_counts.items(), key=lambda kv: kv[1], reverse=True
+    )[:top_n]:
         info = song_titles.get(video_id, {})
         top_songs.append({
             "video_id": video_id,
@@ -128,7 +103,9 @@ def get_stats(top_n: int = 10) -> dict:
         })
 
     by_source = []
-    for source in sorted(playtime_by_source, key=lambda s: playtime_by_source[s], reverse=True):
+    for source in sorted(
+        playtime_by_source, key=lambda s: playtime_by_source[s], reverse=True
+    ):
         by_source.append({
             "source": source,
             "plays": plays_by_source[source],
