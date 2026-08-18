@@ -50,6 +50,11 @@ SPEC: dict = {
         "label": "Crossfade lead",
         "help": "How early the next song's announcement starts before the current one ends.",
     },
+    "dedications_enabled": {
+        "type": "bool",
+        "label": "Song dedications",
+        "help": "Allow requesters to add a dedication message announced via TTS before the song.",
+    },
 }
 
 

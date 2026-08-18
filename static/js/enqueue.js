@@ -53,6 +53,7 @@ setInterval(() => {
 
 const form = document.getElementById('enqueue-form');
 const urlInput = document.getElementById('url');
+const dedicationNameInput = document.getElementById('dedication-name');
 const dedicationInput = document.getElementById('dedication');
 const submitBtn = document.getElementById('submit-btn');
 const result = document.getElementById('result');
@@ -62,6 +63,7 @@ form.addEventListener('submit', async (e) => {
   const url = urlInput.value.trim();
   if (!url) return;
 
+  const dedicationName = dedicationNameInput.value.trim() || undefined;
   const dedication = dedicationInput.value.trim() || undefined;
 
   submitBtn.disabled = true;
@@ -73,7 +75,7 @@ form.addEventListener('submit', async (e) => {
     const res = await fetch('/enqueue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-      body: JSON.stringify({ urls: [url], dedication }),
+      body: JSON.stringify({ urls: [url], dedication, dedication_name: dedicationName }),
     });
     const data = await res.json();
 
@@ -89,7 +91,20 @@ form.addEventListener('submit', async (e) => {
         `Position ${song.position_in_queue}, duration ${song.duration}, ` +
         `estimated wait ${song.estimated_wait}.`;
       urlInput.value = '';
+      dedicationNameInput.value = '';
       dedicationInput.value = '';
+
+      if (song.id) {
+        try {
+          const tracked = JSON.parse(sessionStorage.getItem('_enqueued_song_ids') || '[]');
+          tracked.push(song.id);
+          sessionStorage.setItem('_enqueued_song_ids', JSON.stringify(tracked));
+        } catch (_) {}
+        if ('Notification' in window && Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+      }
+
       loadQueue();
       loadWaitTime();
       loadNowPlaying();

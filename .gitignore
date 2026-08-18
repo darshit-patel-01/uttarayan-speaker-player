@@ -18,3 +18,5 @@ uttarayan.db-shm
 .messages.json
 .outbox.json
 .history.json
+# Added by code-review-graph
+.code-review-graph/

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import secrets
 from typing import List, Optional
 
@@ -80,6 +81,7 @@ MAX_DEDICATION_LENGTH = 100
 class EnqueueRequest(BaseModel):
     urls: List[str]
     dedication: Optional[str] = None
+    dedication_name: Optional[str] = None
 
     @field_validator("urls")
     @classmethod
@@ -91,7 +93,7 @@ class EnqueueRequest(BaseModel):
                 raise ValueError(f"Not a valid YouTube URL: {url}")
         return urls
 
-    @field_validator("dedication")
+    @field_validator("dedication", "dedication_name")
     @classmethod
     def validate_dedication(cls, d: Optional[str]) -> Optional[str]:
         if d is None:
@@ -100,7 +102,7 @@ class EnqueueRequest(BaseModel):
         if not d:
             return None
         if len(d) > MAX_DEDICATION_LENGTH:
-            raise ValueError(f"Dedication must be {MAX_DEDICATION_LENGTH} characters or less")
+            raise ValueError(f"Must be {MAX_DEDICATION_LENGTH} characters or less")
         return d
 
 
@@ -151,7 +153,17 @@ def wait_time():
 import time as _time
 
 
+_VIDEO_ID_RE = re.compile(
+    r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]+)"
+)
+
+
 def _song_summary(song: dict, source: str, progress: Optional[dict] = None) -> dict:
+    video_id = song.get("video_id")
+    if not video_id:
+        m = _VIDEO_ID_RE.search(song.get("url", ""))
+        if m:
+            video_id = m.group(1)
     result = {
         "id": song.get("id"),
         "title": song.get("title"),
@@ -159,6 +171,9 @@ def _song_summary(song: dict, source: str, progress: Optional[dict] = None) -> d
         "url": song["url"],
         "source": source,
         "dedication": song.get("dedication"),
+        "dedication_name": song.get("dedication_name"),
+        "thumbnail": f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg" if video_id else None,
+        "status": song.get("status"),
     }
     if progress:
         result.update(progress)
@@ -197,7 +212,7 @@ def _now_playing_payload() -> dict:
     getting this data can never drift apart.
     """
     songs = queue_state.list_queue()
-    playing = next((s for s in songs if s["status"] == "playing"), None)
+    playing = next((s for s in songs if s["status"] in ("playing", "downloading")), None)
     upcoming = [s for s in songs if s["status"] == "queued"]
 
     if playing is not None:
@@ -217,7 +232,14 @@ def _now_playing_payload() -> dict:
         fallback_next = default_playlist.peek_next_song()
         next_summary = _song_summary(fallback_next, "playlist") if fallback_next else None
 
-    return {"playing": playing_summary, "next": next_summary}
+    queue_len, total_wait = queue_state.current_wait()
+
+    return {
+        "playing": playing_summary,
+        "next": next_summary,
+        "queue_length": queue_len,
+        "estimated_wait_seconds": round(total_wait, 1),
+    }
 
 
 @app.get("/now-playing")
@@ -269,6 +291,36 @@ async def _now_playing_broadcast_loop() -> None:
 @app.on_event("startup")
 async def _start_broadcast_loop() -> None:
     asyncio.create_task(_now_playing_broadcast_loop())
+
+
+# ---------------------------------------------------------------------------
+# UDP LAN discovery — lets the Android admin app find this server
+# automatically on the local network without typing the IP address.
+# Listens on UDP port 19876; when it receives "UTTARAYAN_DISCOVER", it
+# replies with the HTTP base URL so the app can auto-fill the server field.
+# ---------------------------------------------------------------------------
+DISCOVERY_PORT = 19876
+DISCOVERY_MAGIC = b"UTTARAYAN_DISCOVER"
+
+
+def _udp_discovery_thread() -> None:
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", DISCOVERY_PORT))
+    logger.info("UDP discovery listener started on port %d", DISCOVERY_PORT)
+    while True:
+        try:
+            data, addr = sock.recvfrom(1024)
+            if data.strip() == DISCOVERY_MAGIC:
+                sock.sendto(b"UTTARAYAN_SERVER_OK", addr)
+                logger.info("Discovery reply sent to %s", addr)
+        except Exception:
+            logger.exception("UDP discovery error")
+
+
+import threading as _threading
+_threading.Thread(target=_udp_discovery_thread, daemon=True, name="udp-discovery").start()
 
 
 @app.websocket("/ws/now-playing")
@@ -426,6 +478,12 @@ def queue(admin: str = Depends(require_admin)):
     for song in songs:
         song["duration"] = queue_state.format_duration(song["duration_seconds"])
         song["estimated_wait"] = queue_state.format_duration(song["estimated_wait_seconds"])
+        vid = song.get("video_id")
+        if not vid:
+            m = _VIDEO_ID_RE.search(song.get("url", ""))
+            if m:
+                vid = m.group(1)
+        song["thumbnail"] = f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None
     return {"queue": songs}
 
 
@@ -844,13 +902,20 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
     source = detect_source(request)
     requester_id = detect_requester_id(request, source)
 
-    if req.dedication:
+    if runtime_config.get("dedications_enabled"):
+        dedication = req.dedication
+        dedication_name = req.dedication_name
+    else:
+        dedication = None
+        dedication_name = None
+    if dedication or dedication_name:
         from profanity import contains_profanity
-        if contains_profanity(req.dedication):
-            raise HTTPException(
-                status_code=400,
-                detail="Dedication contains inappropriate language. Please rephrase.",
-            )
+        for text in (dedication, dedication_name):
+            if text and contains_profanity(text):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Dedication contains inappropriate language. Please rephrase.",
+                )
 
     def _on_delivery(err, msg, song_id, url):
         if err is not None:
@@ -869,7 +934,8 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
         song_id, position, wait_seconds = queue_state.add_song(
             url, duration, title, uploader, result.video_id,
             source=source, requester_id=requester_id,
-            dedication=req.dedication,
+            dedication=dedication,
+            dedication_name=dedication_name,
         )
 
         try:
@@ -886,7 +952,8 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
                     "title": title,
                     "uploader": uploader,
                     "source": source,
-                    "dedication": req.dedication,
+                    "dedication": dedication,
+                    "dedication_name": dedication_name,
                     "position_in_queue": position,
                     "duration_seconds": duration,
                     "duration": queue_state.format_duration(duration),

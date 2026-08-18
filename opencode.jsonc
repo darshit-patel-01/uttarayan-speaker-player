@@ -1,0 +1,15 @@
+{
+  "mcp": {
+    "code-review-graph": {
+      "type": "local",
+      "command": [
+        "C:\\Users\\darsh\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+        "-m",
+        "code_review_graph",
+        "serve",
+        "--repo",
+        "C:\\Users\\darsh\\Git\\uttarayan-speaker-player"
+      ]
+    }
+  }
+}

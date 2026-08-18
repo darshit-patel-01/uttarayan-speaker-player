@@ -101,6 +101,21 @@ async function loadQueue() {
 
       const titleTd = document.createElement('td');
       titleTd.style.cssText = 'white-space:normal; max-width:280px;';
+
+      const titleWrapper = document.createElement('div');
+      titleWrapper.style.cssText = 'display:flex; align-items:center; gap:8px;';
+
+      if (song.thumbnail) {
+        const thumb = document.createElement('img');
+        thumb.src = song.thumbnail;
+        thumb.alt = '';
+        thumb.style.cssText = 'width:48px; height:36px; object-fit:cover; border-radius:3px; flex-shrink:0;';
+        titleWrapper.appendChild(thumb);
+      }
+
+      const titleInfo = document.createElement('div');
+      titleInfo.style.cssText = 'min-width:0;';
+
       const titleLine = document.createElement('div');
       titleLine.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
       if (song.source) {
@@ -122,13 +137,24 @@ async function loadQueue() {
         sb.style.cssText = 'font-size:0.7rem; background:#e8f5e9; color:#2e7d32; padding:1px 5px; border-radius:8px; white-space:nowrap;';
         titleLine.appendChild(sb);
       }
-      if (song.dedication) {
+      if (song.status === 'downloading') {
+        const db = document.createElement('span');
+        db.textContent = '⬇ downloading';
+        db.style.cssText = 'font-size:0.7rem; background:#fff3e0; color:#e65100; padding:1px 5px; border-radius:8px; white-space:nowrap; animation:pulse 1.5s infinite;';
+        titleLine.appendChild(db);
+      }
+      titleInfo.appendChild(titleLine);
+      if (song.dedication_name || song.dedication) {
         const dedLine = document.createElement('div');
         dedLine.style.cssText = 'font-size:0.78rem; color:#7b1fa2; margin-top:2px; font-style:italic;';
-        dedLine.textContent = `\u{1F49C} ${song.dedication}`;
-        titleTd.appendChild(dedLine);
+        const parts = [];
+        if (song.dedication_name) parts.push(`by ${song.dedication_name}`);
+        if (song.dedication) parts.push(`for ${song.dedication}`);
+        dedLine.textContent = `\u{1F49C} Dedicated ${parts.join(' ')}`;
+        titleInfo.appendChild(dedLine);
       }
-      titleTd.appendChild(titleLine);
+      titleWrapper.appendChild(titleInfo);
+      titleTd.appendChild(titleWrapper);
       row.appendChild(titleTd);
 
       row.appendChild(cell(song.duration));

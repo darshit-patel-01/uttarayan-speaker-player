@@ -2,6 +2,7 @@
 
 let npState = { elapsed: 0, duration: 0, isPaused: false, isStopped: false, hasPlaying: false };
 let seekBarDragging = false;
+let _lastNotifiedSongId = null;
 
 function formatTime(secs) {
   secs = Math.max(0, Math.round(secs || 0));
@@ -17,15 +18,38 @@ function renderNowPlayingRow(containerId, song, emptyText, showIndicator) {
     return;
   }
 
-  if (showIndicator) {
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'display:flex; align-items:center; gap:10px;';
+
+  if (song.thumbnail) {
+    const thumb = document.createElement('img');
+    thumb.src = song.thumbnail;
+    thumb.alt = '';
+    thumb.style.cssText = 'width:64px; height:48px; object-fit:cover; border-radius:4px; flex-shrink:0;';
+    wrapper.appendChild(thumb);
+  }
+
+  const info = document.createElement('div');
+  info.style.cssText = 'min-width:0;';
+
+  const titleRow = document.createElement('div');
+  titleRow.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
+
+  if (showIndicator && song.status !== 'downloading') {
     const indicator = document.createElement('span');
     indicator.className = 'np-playing-indicator';
     indicator.setAttribute('aria-hidden', 'true');
     for (let i = 0; i < 4; i++) {
       indicator.appendChild(document.createElement('span'));
     }
-    container.appendChild(indicator);
-    container.appendChild(document.createTextNode(' '));
+    titleRow.appendChild(indicator);
+  }
+
+  if (showIndicator && song.status === 'downloading') {
+    const dlBadge = document.createElement('span');
+    dlBadge.textContent = '⬇ downloading';
+    dlBadge.style.cssText = 'font-size:0.7rem; background:#fff3e0; color:#e65100; padding:1px 5px; border-radius:8px; white-space:nowrap; animation:pulse 1.5s infinite;';
+    titleRow.appendChild(dlBadge);
   }
 
   const link = document.createElement('a');
@@ -33,24 +57,65 @@ function renderNowPlayingRow(containerId, song, emptyText, showIndicator) {
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
   link.textContent = song.title || song.url;
-  container.appendChild(link);
+  titleRow.appendChild(link);
+  info.appendChild(titleRow);
 
   if (song.uploader) {
-    container.appendChild(document.createTextNode(` — ${song.uploader}`));
+    const uploaderDiv = document.createElement('div');
+    uploaderDiv.style.cssText = 'font-size:0.85rem; color:#666;';
+    uploaderDiv.textContent = song.uploader;
+    info.appendChild(uploaderDiv);
   }
 
-  if (song.dedication) {
+  if (song.dedication_name || song.dedication) {
     const ded = document.createElement('div');
     ded.style.cssText = 'font-size:0.82rem; color:#7b1fa2; margin-top:2px; font-style:italic;';
-    ded.textContent = `\u{1F49C} Dedicated: ${song.dedication}`;
-    container.appendChild(ded);
+    const parts = [];
+    if (song.dedication_name) parts.push(`by ${song.dedication_name}`);
+    if (song.dedication) parts.push(`for ${song.dedication}`);
+    ded.textContent = `\u{1F49C} Dedicated ${parts.join(' ')}`;
+    info.appendChild(ded);
   }
 
   if (song.source === 'playlist') {
     const badge = document.createElement('span');
     badge.className = 'np-source';
     badge.textContent = ' (default playlist)';
-    container.appendChild(badge);
+    info.appendChild(badge);
+  }
+
+  wrapper.appendChild(info);
+  container.appendChild(wrapper);
+}
+
+// --- Browser notifications for web requesters ----------------------------
+
+function _getTrackedSongIds() {
+  try {
+    return JSON.parse(sessionStorage.getItem('_enqueued_song_ids') || '[]');
+  } catch (_) { return []; }
+}
+
+function _removeTrackedSongId(id) {
+  const ids = _getTrackedSongIds().filter(i => i !== id);
+  sessionStorage.setItem('_enqueued_song_ids', JSON.stringify(ids));
+}
+
+function _checkSongNotification(data) {
+  if (!data.playing || !data.playing.id) return;
+  if (data.playing.status === 'downloading') return;
+  const playingId = data.playing.id;
+  if (playingId === _lastNotifiedSongId) return;
+  const tracked = _getTrackedSongIds();
+  if (!tracked.includes(playingId)) return;
+  _lastNotifiedSongId = playingId;
+  _removeTrackedSongId(playingId);
+  const title = data.playing.title || 'Your song';
+  if (Notification.permission === 'granted') {
+    new Notification('\u{1F3B5} Your song is playing!', {
+      body: title,
+      icon: data.playing.thumbnail || undefined,
+    });
   }
 }
 
@@ -101,6 +166,15 @@ function applyNowPlayingData(data) {
     npState.isPaused = false;
   }
   updateAdminProgressUI();
+
+  _checkSongNotification(data);
+
+  if (typeof waitTimeState !== 'undefined' && data.queue_length !== undefined) {
+    waitTimeState.loaded = true;
+    waitTimeState.queueLength = data.queue_length;
+    waitTimeState.estimatedWaitSeconds = data.estimated_wait_seconds ?? 0;
+    renderWaitTimeBanner();
+  }
 }
 
 async function loadNowPlaying() {

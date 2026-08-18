@@ -61,6 +61,7 @@ class Settings:
     # queue, so the outgoing song's tail overlaps the announcement instead
     # of playing into dead silence first. See consumer_worker._announce_upcoming.
     crossfade_lead_seconds: float = float(os.getenv("CROSSFADE_LEAD_SECONDS", "8"))
+    dedications_enabled: bool = os.getenv("DEDICATIONS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
     # Simple file-based signal: the API touches this file to request a skip,
     # and the consumer (polling while ffplay runs) deletes it once handled.

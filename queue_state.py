@@ -74,6 +74,7 @@ def add_song(
     source: Optional[str] = None,
     requester_id: Optional[str] = None,
     dedication: Optional[str] = None,
+    dedication_name: Optional[str] = None,
 ) -> Tuple[str, int, float]:
     with db.transaction() as conn:
         song_id = _generate_song_id(conn)
@@ -87,12 +88,12 @@ def add_song(
             "INSERT INTO queue_items "
             "(id, url, video_id, title, uploader, duration, status, source, "
             "requester_id, started_at, seek_offset, paused_duration, paused_at, "
-            "skip_requested, position, dedication) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "skip_requested, position, dedication, dedication_name) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 song_id, url, video_id, title, uploader, duration, "queued",
                 source, requester_id, None, 0, 0, None, 0, max_pos + 1,
-                dedication,
+                dedication, dedication_name,
             ),
         )
     return song_id, position_in_queue, estimated_wait_seconds
@@ -151,12 +152,13 @@ def list_queue() -> list:
     result = []
     songs_ahead = []
     for index, item in enumerate(items):
-        if item.get("skip_requested") and item["status"] != "playing":
+        if item.get("skip_requested") and item["status"] not in ("playing", "downloading"):
             continue
         estimated_wait_seconds = sum(_remaining_seconds(s) for s in songs_ahead)
         result.append({
             "id": item["id"],
             "url": item["url"],
+            "video_id": item.get("video_id"),
             "title": item.get("title"),
             "uploader": item.get("uploader"),
             "status": item["status"],
@@ -165,6 +167,7 @@ def list_queue() -> list:
             "estimated_wait_seconds": estimated_wait_seconds,
             "source": item.get("source"),
             "dedication": item.get("dedication"),
+            "dedication_name": item.get("dedication_name"),
         })
         songs_ahead.append(item)
     return result
@@ -173,7 +176,7 @@ def list_queue() -> list:
 def get_playing_progress() -> Optional[dict]:
     conn = db.get_conn()
     row = conn.execute(
-        "SELECT * FROM queue_items WHERE status='playing' LIMIT 1"
+        "SELECT * FROM queue_items WHERE status IN ('playing','downloading') LIMIT 1"
     ).fetchone()
     if row is None:
         return None
@@ -204,6 +207,7 @@ def get_next_queued() -> Optional[dict]:
         "title": row["title"],
         "duration": row["duration"],
         "dedication": row["dedication"],
+        "dedication_name": row["dedication_name"],
     }
 
 
@@ -228,6 +232,27 @@ def is_skip_requested(song_id: str) -> bool:
     return bool(row["skip_requested"]) if row else False
 
 
+def mark_downloading(song_id: str) -> None:
+    played_item = None
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT * FROM queue_items WHERE id=?", (song_id,)
+        ).fetchone()
+        if row:
+            now = time.time()
+            conn.execute(
+                "UPDATE queue_items SET status='downloading', started_at=?, "
+                "seek_offset=0, paused_duration=0, paused_at=NULL WHERE id=?",
+                (now, song_id),
+            )
+            played_item = dict(row)
+            played_item["status"] = "downloading"
+            played_item["started_at"] = now
+            _append_to_history(conn, played_item)
+    if played_item is not None:
+        analytics.record_play(played_item)
+
+
 def mark_playing(song_id: str) -> None:
     played_item = None
     with db.transaction() as conn:
@@ -247,6 +272,15 @@ def mark_playing(song_id: str) -> None:
             _append_to_history(conn, played_item)
     if played_item is not None:
         analytics.record_play(played_item)
+
+
+def reset_started_at(song_id: str) -> None:
+    conn = db.get_conn()
+    conn.execute(
+        "UPDATE queue_items SET status='playing', started_at=?, seek_offset=0, paused_duration=0 "
+        "WHERE id=?",
+        (time.time(), song_id),
+    )
 
 
 def mark_paused(song_id: str) -> None:
@@ -396,7 +430,7 @@ def reset_stale_playing() -> None:
     conn.execute(
         "UPDATE queue_items SET status='queued', started_at=NULL, "
         "paused_at=NULL, paused_duration=0, seek_offset=0 "
-        "WHERE status='playing'"
+        "WHERE status IN ('playing','downloading')"
     )
 
 

@@ -72,13 +72,14 @@ logger = logging.getLogger("consumer_worker")
 # Voice: hi-IN-SwaraNeural (warm female Hindi voice).
 # rate="+25%" and pitch="+8Hz" give it an upbeat, energetic feel.
 # ---------------------------------------------------------------------------
-def _tts_announce(title: str, dedication: str = None) -> None:
+def _tts_announce(title: str, dedication: str = None, dedication_name: str = None) -> None:
     import asyncio
     import edge_tts
+    import runtime_config
 
     async def _generate(path: str) -> None:
-        if dedication:
-            tts_text = f"{dedication} के लिए अगला गाना है… {title}!"
+        if runtime_config.get("dedications_enabled") and dedication_name and dedication:
+            tts_text = f"यह गाना {dedication_name} की तरफ से {dedication} के लिए है… {title}!"
         else:
             tts_text = f"अगला गाना है… {title}!"
         communicate = edge_tts.Communicate(
@@ -108,12 +109,12 @@ def _tts_announce(title: str, dedication: str = None) -> None:
                 pass
 
 
-def _tts_announce_async(title: str, dedication: str = None) -> None:
+def _tts_announce_async(title: str, dedication: str = None, dedication_name: str = None) -> None:
     """Fire-and-forget variant for crossfading: runs _tts_announce on a
     background thread so it can overlap the tail of the still-playing
     current song instead of blocking the main playback loop."""
     threading.Thread(
-        target=_tts_announce, args=(title, dedication),
+        target=_tts_announce, args=(title, dedication, dedication_name),
         daemon=True, name="tts-crossfade",
     ).start()
 
@@ -138,6 +139,7 @@ def _announce_upcoming(current_song_id: str):
             _tts_announce_async(
                 upcoming.get("title") or "the next song",
                 upcoming.get("dedication"),
+                upcoming.get("dedication_name"),
             )
     return _fire
 
@@ -268,7 +270,7 @@ def main():
                 queue_state.mark_done(song_id)
                 continue
 
-            queue_state.mark_playing(song_id)
+            queue_state.mark_downloading(song_id)
 
             # Normally this song was already announced during the previous
             # song's tail (crossfade, see _announce_upcoming below) — only
@@ -280,6 +282,7 @@ def main():
                 _tts_announce(
                     next_item.get("title") or "the next song",
                     next_item.get("dedication"),
+                    next_item.get("dedication_name"),
                 )
             _last_announced_song_id = None
 
@@ -304,6 +307,7 @@ def main():
                     prefetched_path=pre_path,
                     duration=next_item.get("duration"),
                     on_near_end=_announce_upcoming(song_id),
+                    on_playback_start=lambda: queue_state.reset_started_at(song_id),
                 )
                 logger.info("Finished: %s", url)
             except Exception:

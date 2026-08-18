@@ -164,6 +164,10 @@ button.secondary { background: var(--kite-purple); }
   0%, 100% { transform: scaleY(0.35); }
   50% { transform: scaleY(1); }
 }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
 @media (prefers-reduced-motion: reduce) {
   .np-playing-indicator span { animation: none; transform: scaleY(0.7); }
 }

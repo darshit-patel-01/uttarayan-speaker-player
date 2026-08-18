@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS queue_items (
     paused_at REAL,
     skip_requested INTEGER DEFAULT 0,
     position INTEGER NOT NULL,
-    dedication TEXT
+    dedication TEXT,
+    dedication_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS history (
@@ -322,6 +323,10 @@ def _run_migrations(conn) -> None:
     """Schema migrations for existing databases."""
     try:
         conn.execute("ALTER TABLE queue_items ADD COLUMN dedication TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE queue_items ADD COLUMN dedication_name TEXT")
     except sqlite3.OperationalError:
         pass
 

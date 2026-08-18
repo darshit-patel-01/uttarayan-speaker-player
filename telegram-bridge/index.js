@@ -89,23 +89,26 @@ async function handleStatusCommand() {
 // that just contain a bare link with no "play" in front are ignored, so
 // people can share YouTube links in chat without accidentally queuing them.
 const PLAY_YOUTUBE_URL_RE =
-  /\bplay\s+((?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=[\w-]+(?:[&?][\w=&%.-]*)?|youtu\.be\/[\w-]+(?:\?[\w=&%.-]*)?|youtube\.com\/shorts\/[\w-]+(?:\?[\w=&%.-]*)?))(?:\s+for\s+(.+?))?$/gim;
+  /\bplay\s+((?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=[\w-]+(?:[&?][\w=&%.-]*)?|youtu\.be\/[\w-]+(?:\?[\w=&%.-]*)?|youtube\.com\/shorts\/[\w-]+(?:\?[\w=&%.-]*)?))(?:\s+from\s+(.+?))?(?:\s+for\s+(.+?))?$/gim;
 
 function extractYoutubeUrls(text) {
-  if (!text) return { urls: [], dedication: undefined };
+  if (!text) return { urls: [], dedication: undefined, dedicationName: undefined };
   const urls = [];
-  let dedication;
+  let dedication, dedicationName;
   for (const match of text.matchAll(PLAY_YOUTUBE_URL_RE)) {
     const url = match[1];
     urls.push(url.startsWith("http") ? url : `https://${url}`);
-    if (!dedication && match[2]) {
-      dedication = match[2].trim().slice(0, 100) || undefined;
+    if (!dedicationName && match[2]) {
+      dedicationName = match[2].trim().slice(0, 100) || undefined;
+    }
+    if (!dedication && match[3]) {
+      dedication = match[3].trim().slice(0, 100) || undefined;
     }
   }
-  return { urls: [...new Set(urls)], dedication };
+  return { urls: [...new Set(urls)], dedication, dedicationName };
 }
 
-async function enqueueUrls(urls, { asAdmin = false, requesterId, dedication } = {}) {
+async function enqueueUrls(urls, { asAdmin = false, requesterId, dedication, dedicationName } = {}) {
   const headers = { "Content-Type": "application/json", "X-Source": "telegram" };
   if (requesterId) {
     headers["X-Requester-Id"] = requesterId;
@@ -122,6 +125,7 @@ async function enqueueUrls(urls, { asAdmin = false, requesterId, dedication } = 
 
   const body = { urls };
   if (dedication) body.dedication = dedication;
+  if (dedicationName) body.dedication_name = dedicationName;
 
   const res = await fetch(ENQUEUE_URL, {
     method: "POST",
@@ -231,18 +235,18 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  const { urls, dedication } = extractYoutubeUrls(text);
+  const { urls, dedication, dedicationName } = extractYoutubeUrls(text);
   if (urls.length === 0) return; // silently ignore messages with no "play <link>"
 
   const senderId = String(msg.from?.id || "");
   const asAdmin = ADMIN_TELEGRAM_IDS.includes(senderId);
 
   for (const url of urls) {
-    await logLine(`REQUEST telegram_id=${senderId} admin=${asAdmin} url=${url}${dedication ? ` dedication="${dedication}"` : ""}`);
+    await logLine(`REQUEST telegram_id=${senderId} admin=${asAdmin} url=${url}${dedicationName ? ` from="${dedicationName}"` : ""}${dedication ? ` for="${dedication}"` : ""}`);
   }
 
   try {
-    const data = await enqueueUrls(urls, { asAdmin, requesterId: senderId, dedication });
+    const data = await enqueueUrls(urls, { asAdmin, requesterId: senderId, dedication, dedicationName });
 
     // Check if any rejection is a blocked-user message
     const blockedRej = (data.rejected || []).find((r) => r.reason && r.reason.startsWith("BLOCKED:"));

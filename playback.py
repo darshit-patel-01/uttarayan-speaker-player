@@ -174,6 +174,7 @@ def play_youtube_audio(
     prefetched_path: str | None = None,
     duration: float | None = None,
     on_near_end=None,
+    on_playback_start=None,
 ) -> bool:
     """
     Downloads the audio locally, then plays it via ffplay, blocking until
@@ -229,6 +230,8 @@ def play_youtube_audio(
             return subprocess.Popen(cmd)
 
         process = _start_ffplay(0.0, _current_volume)
+        if on_playback_start:
+            on_playback_start()
         _paused = False
         _near_end_fired = False
 
