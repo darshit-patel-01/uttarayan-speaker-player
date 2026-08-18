@@ -46,10 +46,20 @@ function renderNowPlayingRow(containerId, song, emptyText, showIndicator) {
   }
 
   if (showIndicator && song.status === 'downloading') {
-    const dlBadge = document.createElement('span');
-    dlBadge.textContent = '⬇ downloading';
-    dlBadge.style.cssText = 'font-size:0.7rem; background:#fff3e0; color:#e65100; padding:1px 5px; border-radius:8px; white-space:nowrap; animation:pulse 1.5s infinite;';
-    titleRow.appendChild(dlBadge);
+    const dlWrap = document.createElement('span');
+    dlWrap.style.cssText = 'display:inline-flex; align-items:center; gap:4px;';
+    const pct = song.download_percent ?? 0;
+    const barOuter = document.createElement('span');
+    barOuter.style.cssText = 'display:inline-block; width:60px; height:6px; background:#ffe0b2; border-radius:3px; overflow:hidden; vertical-align:middle;';
+    const barInner = document.createElement('span');
+    barInner.style.cssText = `display:block; height:100%; width:${pct}%; background:#e65100; border-radius:3px; transition:width 0.3s;`;
+    barOuter.appendChild(barInner);
+    const label = document.createElement('span');
+    label.textContent = `⬇ ${pct}%`;
+    label.style.cssText = 'font-size:0.7rem; color:#e65100; white-space:nowrap;';
+    dlWrap.appendChild(barOuter);
+    dlWrap.appendChild(label);
+    titleRow.appendChild(dlWrap);
   }
 
   const link = document.createElement('a');

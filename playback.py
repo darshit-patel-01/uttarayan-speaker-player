@@ -1,3 +1,6 @@
+import ctypes
+from ctypes import wintypes
+import json
 import logging
 import os
 import shutil
@@ -5,13 +8,14 @@ import subprocess
 import tempfile
 import time
 
-import psutil
 import yt_dlp
 
 import runtime_config
 from config import settings
 
 logger = logging.getLogger("playback")
+
+_MPV_EXE = shutil.which("mpv") or r"C:\Program Files\MPV Player\mpv.exe"
 
 _COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
@@ -20,22 +24,40 @@ YDL_DOWNLOAD_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
-    # Use the iOS player client — it returns CDN URLs that don't 403.
-    # The web client's download URLs are increasingly blocked by YouTube's
-    # bot-detection even when cookies are present; iOS bypasses this.
     "extractor_args": {
         "youtube": {
             "player_client": ["android", "web"],
         }
     },
-    # Place a cookies.txt (Netscape format) exported from your browser in the
-    # project root to bypass YouTube 403s.  Export it once using the
-    # "Get cookies.txt LOCALLY" Chrome extension while logged into YouTube.
-    # If the file doesn't exist, yt-dlp proceeds without cookies.
     **({"cookiefile": _COOKIES_FILE} if os.path.exists(_COOKIES_FILE) else {}),
 }
 
 _POLL_INTERVAL_SECONDS = 0.2
+_active_mpv: subprocess.Popen | None = None
+
+
+def kill_active_player() -> None:
+    if _active_mpv is not None and _active_mpv.poll() is None:
+        _active_mpv.terminate()
+        try:
+            _active_mpv.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _active_mpv.kill()
+
+_download_progress: dict = {"percent": 0}
+
+
+def get_download_progress() -> dict:
+    return dict(_download_progress)
+
+
+def _dl_progress_hook(d: dict) -> None:
+    if d["status"] == "downloading":
+        total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+        downloaded = d.get("downloaded_bytes", 0)
+        _download_progress["percent"] = round(downloaded / total * 100) if total else 0
+    elif d["status"] == "finished":
+        _download_progress["percent"] = 100
 
 
 def download_audio(youtube_url: str, dest_dir: str) -> str:
@@ -43,18 +65,12 @@ def download_audio(youtube_url: str, dest_dir: str) -> str:
     return _download_audio(youtube_url, dest_dir)
 
 
-def _download_audio(youtube_url: str, dest_dir: str) -> str:
-    """
-    Downloads the best audio track to dest_dir and returns the local file path.
-
-    Downloading first (instead of streaming straight from YouTube's CDN into
-    ffplay) trades a short startup delay for reliability: yt-dlp's downloader
-    retries properly on a dropped connection, whereas ffplay reading directly
-    off the CDN would just cut the song short (TLS/IO error -10054) with no
-    way to recover mid-stream.
-    """
+def _download_audio(youtube_url: str, dest_dir: str, track_progress: bool = False) -> str:
     outtmpl = os.path.join(dest_dir, "%(id)s.%(ext)s")
     opts = {**YDL_DOWNLOAD_OPTS, "outtmpl": outtmpl}
+    if track_progress:
+        _download_progress["percent"] = 0
+        opts["progress_hooks"] = [_dl_progress_hook]
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(youtube_url, download=True)
         return ydl.prepare_filename(info)
@@ -72,19 +88,16 @@ def _clear_skip_signal() -> None:
 
 
 def request_skip() -> None:
-    """Called by the API to signal that the currently playing track should be skipped."""
     with open(settings.skip_signal_file, "w") as f:
         f.write("skip")
 
 
 def request_pause() -> None:
-    """Called by the API to pause the currently playing track."""
     with open(settings.pause_signal_file, "w") as f:
         f.write("pause")
 
 
 def request_resume() -> None:
-    """Called by the API to resume a paused or stopped track."""
     try:
         os.remove(settings.pause_signal_file)
     except FileNotFoundError:
@@ -93,18 +106,15 @@ def request_resume() -> None:
 
 
 def is_paused() -> bool:
-    """Returns True if a pause signal is currently active."""
     return os.path.exists(settings.pause_signal_file)
 
 
 def request_seek(seconds: float) -> None:
-    """Called by the API to seek to `seconds` into the current track."""
     with open(settings.seek_signal_file, "w") as f:
         f.write(str(seconds))
 
 
 def _get_seek_target() -> float | None:
-    """Reads and returns the seek target (seconds), or None if no seek pending."""
     try:
         with open(settings.seek_signal_file, "r") as f:
             return float(f.read().strip())
@@ -120,13 +130,11 @@ def _clear_seek_signal() -> None:
 
 
 def request_stop() -> None:
-    """Called by the API to halt all playback (current song + block next song)."""
     with open(settings.stop_signal_file, "w") as f:
         f.write("stop")
 
 
 def clear_stop() -> None:
-    """Clears the stop signal so the consumer resumes normal operation."""
     try:
         os.remove(settings.stop_signal_file)
     except FileNotFoundError:
@@ -134,7 +142,6 @@ def clear_stop() -> None:
 
 
 def is_stopped() -> bool:
-    """Returns True if the stop signal is active."""
     return os.path.exists(settings.stop_signal_file)
 
 
@@ -143,7 +150,6 @@ def is_stopped() -> bool:
 # ---------------------------------------------------------------------------
 
 def get_volume() -> float:
-    """Returns the current volume level (0.0–1.5, default 1.0)."""
     try:
         with open(settings.volume_file, "r") as f:
             v = float(f.read().strip())
@@ -153,12 +159,66 @@ def get_volume() -> float:
 
 
 def set_volume(level: float) -> None:
-    """Persists the desired volume level. The poll loop picks it up automatically."""
     level = max(0.0, min(1.5, level))
     with open(settings.volume_file, "w") as f:
         f.write(str(level))
 
 
+# ---------------------------------------------------------------------------
+# mpv IPC — send commands via Windows named pipe (no external deps)
+# ---------------------------------------------------------------------------
+
+_mpv_pipe_seq = 0
+_k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+_k32.CreateFileW.restype = wintypes.HANDLE
+_k32.CreateFileW.argtypes = [
+    wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+    ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+]
+_k32.WriteFile.restype = wintypes.BOOL
+_k32.WriteFile.argtypes = [
+    wintypes.HANDLE, ctypes.c_char_p, wintypes.DWORD,
+    ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+]
+_INVALID_HANDLE = wintypes.HANDLE(-1).value
+_GENERIC_RW = 0x80000000 | 0x40000000
+_OPEN_EXISTING = 3
+
+
+def _next_pipe_path() -> str:
+    global _mpv_pipe_seq
+    _mpv_pipe_seq += 1
+    return rf"\\.\pipe\mpv-uttarayan-{os.getpid()}-{_mpv_pipe_seq}"
+
+
+def _mpv_connect(pipe_path: str, timeout: float = 5.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        h = _k32.CreateFileW(pipe_path, _GENERIC_RW, 0, None, _OPEN_EXISTING, 0, None)
+        if h != _INVALID_HANDLE:
+            return h
+        time.sleep(0.15)
+    logger.warning("Could not connect to mpv IPC pipe: %s", pipe_path)
+    return None
+
+
+def _mpv_cmd(handle, cmd: list) -> None:
+    if handle is None:
+        return
+    try:
+        data = json.dumps({"command": cmd}).encode() + b"\n"
+        written = wintypes.DWORD()
+        _k32.WriteFile(handle, data, len(data), ctypes.byref(written), None)
+    except Exception:
+        pass
+
+
+def _mpv_close(handle) -> None:
+    if handle is not None:
+        try:
+            _k32.CloseHandle(handle)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -177,83 +237,78 @@ def play_youtube_audio(
     on_playback_start=None,
 ) -> bool:
     """
-    Downloads the audio locally, then plays it via ffplay, blocking until
+    Downloads the audio locally, then plays it via mpv, blocking until
     playback finishes, a skip/stop is requested, or interrupt_check() returns
     True — whichever comes first.
 
-    Callbacks (all optional, called from the consumer process):
-      on_pause()         — called the moment ffplay is suspended
-      on_resume()        — called the moment ffplay is resumed
-      on_seek(offset)    — called after ffplay restarts at `offset` seconds
-      on_near_end()      — called once, when playback reaches
-                            settings.crossfade_lead_seconds before the end
-                            (needs `duration`; no-op if duration is unknown).
-                            Exceptions are caught and logged so a crossfade
-                            failure can't take down the current song.
+    Volume changes are applied instantly via mpv's IPC socket — no restart,
+    no audio gap.
 
     Returns True if playback completed normally, False if cut short.
     """
     _clear_skip_signal()
     _clear_seek_signal()
 
-    # Use pre-fetched file if available; otherwise download now.
     if prefetched_path and os.path.exists(prefetched_path):
         _tmp_dir = None
         local_path = prefetched_path
     else:
         _tmp_dir = tempfile.mkdtemp(prefix="ytplayer_")
         try:
-            local_path = _download_audio(youtube_url, _tmp_dir)
+            local_path = _download_audio(youtube_url, _tmp_dir, track_progress=True)
         except Exception:
             shutil.rmtree(_tmp_dir, ignore_errors=True)
             raise
 
     try:
-        # Track local playback position so volume changes can restart at the
-        # right spot without going through the seek-signal mechanism.
-        _ffplay_seek_offset = 0.0
-        _ffplay_start = time.time()
         _current_volume = get_volume()
+        _playback_offset = 0.0
+        _playback_start = time.time()
 
-        def _start_ffplay(start_seconds: float = 0.0, volume: float = 1.0) -> subprocess.Popen:
-            cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error"]
-            if start_seconds > 0:
-                cmd += ["-ss", str(start_seconds)]
-            filters = []
-            if runtime_config.get("normalize_volume"):
-                filters.append(f"loudnorm=I={runtime_config.get('loudnorm_target_lufs')}:TP=-1.5:LRA=11")
-            if abs(volume - 1.0) > 0.01:
-                filters.append(f"volume={volume}")
-            if filters:
-                cmd += ["-af", ",".join(filters)]
-            cmd.append(local_path)
-            return subprocess.Popen(cmd)
+        af_filters = []
+        if runtime_config.get("normalize_volume"):
+            af_filters.append(
+                f"loudnorm=I={runtime_config.get('loudnorm_target_lufs')}:TP=-1.5:LRA=11"
+            )
 
-        process = _start_ffplay(0.0, _current_volume)
+        pipe_path = _next_pipe_path()
+        cmd = [
+            _MPV_EXE,
+            "--no-video", "--vo=null", "--no-terminal",
+            "--audio-display=no",
+            f"--input-ipc-server={pipe_path}",
+            f"--volume={round(_current_volume * 100)}",
+        ]
+        if af_filters:
+            cmd.append(f"--af={','.join(af_filters)}")
+        cmd.append(local_path)
+
+        global _active_mpv
+        process = subprocess.Popen(cmd)
+        _active_mpv = process
+        mpv_pipe = _mpv_connect(pipe_path)
+
         if on_playback_start:
             on_playback_start()
+
         _paused = False
         _near_end_fired = False
 
-        def _kill_process() -> None:
-            """Terminate ffplay, resuming it first if suspended so it can exit cleanly."""
-            nonlocal _paused
-            if _paused:
-                try:
-                    psutil.Process(process.pid).resume()
-                except psutil.NoSuchProcess:
-                    pass
-                _paused = False
-            process.terminate()
+        def _kill() -> None:
+            _mpv_cmd(mpv_pipe, ["quit"])
             try:
-                process.wait(timeout=5)
+                process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
 
         def _terminate(reason: str) -> bool:
             logger.info("%s, stopping playback of %s", reason, youtube_url)
-            _kill_process()
+            _kill()
             return False
 
         try:
@@ -261,110 +316,48 @@ def play_youtube_audio(
                 ret = process.poll()
                 if ret is not None:
                     if ret != 0:
-                        raise RuntimeError(f"ffplay exited with code {ret} for {youtube_url}")
+                        raise RuntimeError(f"mpv exited with code {ret} for {youtube_url}")
                     return True
 
-                # --- Stop signal -------------------------------------------
                 if is_stopped():
                     return _terminate("Stop requested")
 
-                # --- Skip signal -------------------------------------------
                 if os.path.exists(settings.skip_signal_file):
                     return _terminate("Skip requested")
 
-                # --- Interrupt check (default-playlist interrupt) ----------
                 if interrupt_check is not None and interrupt_check():
                     return _terminate("Real song enqueued")
 
-                # --- Seek signal -------------------------------------------
+                # --- Seek (instant via IPC, no restart) --------------------
                 seek_target = _get_seek_target()
                 if seek_target is not None:
                     _clear_seek_signal()
                     if _paused:
                         try:
-                            psutil.Process(process.pid).resume()
-                        except psutil.NoSuchProcess:
+                            os.remove(settings.pause_signal_file)
+                        except FileNotFoundError:
                             pass
+                        _mpv_cmd(mpv_pipe, ["set_property", "pause", False])
+                        _paused = False
                         if on_resume:
                             on_resume()
-                        _paused = False
-                    try:
-                        os.remove(settings.pause_signal_file)
-                    except FileNotFoundError:
-                        pass
-
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-
-                    _ffplay_seek_offset = seek_target
-                    _ffplay_start = time.time()
-                    _current_volume = get_volume()
-
+                    _mpv_cmd(mpv_pipe, ["seek", seek_target, "absolute"])
+                    _playback_offset = seek_target
+                    _playback_start = time.time()
                     if on_seek:
                         on_seek(seek_target)
-
-                    process = _start_ffplay(seek_target, _current_volume)
                     logger.info("Seeked to %.1fs for %s", seek_target, youtube_url)
                     continue
 
-                # --- Volume change (debounced) ---------------------------------
+                # --- Volume (instant via IPC, no restart) ------------------
                 new_volume = get_volume()
                 if abs(new_volume - _current_volume) > 0.01:
-                    # Wait until volume is stable for 400ms before restarting
-                    _vol_last_seen = new_volume
-                    _vol_stable_since = time.time()
-                    while True:
-                        time.sleep(0.1)
-                        check = get_volume()
-                        if abs(check - _vol_last_seen) > 0.005:
-                            _vol_last_seen = check
-                            _vol_stable_since = time.time()
-                        elif time.time() - _vol_stable_since >= 0.4:
-                            break
-
-                    new_volume = _vol_last_seen
-                    if abs(new_volume - _current_volume) <= 0.01:
-                        continue
-
-                    current_elapsed = _ffplay_seek_offset + (time.time() - _ffplay_start)
-                    was_paused = _paused
-
-                    old_process = process
                     _current_volume = new_volume
-                    _ffplay_seek_offset = current_elapsed
-                    _ffplay_start = time.time()
-                    process = _start_ffplay(current_elapsed, _current_volume)
+                    _mpv_cmd(mpv_pipe, ["set_property", "volume", round(new_volume * 100)])
 
-                    if was_paused:
-                        try:
-                            psutil.Process(old_process.pid).resume()
-                        except psutil.NoSuchProcess:
-                            pass
-                    old_process.terminate()
-                    try:
-                        old_process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        old_process.kill()
-                        old_process.wait()
-
-                    if was_paused:
-                        _paused = False
-                        time.sleep(0.1)
-                        try:
-                            psutil.Process(process.pid).suspend()
-                        except psutil.NoSuchProcess:
-                            pass
-                        _paused = True
-
-                    logger.info("Volume changed to %.2f at %.1fs", new_volume, current_elapsed)
-
-                # --- Crossfade: fire on_near_end once, near the natural end -
+                # --- Crossfade: fire on_near_end once, near the end --------
                 if not _near_end_fired and not _paused and duration and on_near_end:
-                    current_elapsed = _ffplay_seek_offset + (time.time() - _ffplay_start)
+                    current_elapsed = _playback_offset + (time.time() - _playback_start)
                     if current_elapsed >= duration - runtime_config.get("crossfade_lead_seconds"):
                         _near_end_fired = True
                         try:
@@ -372,23 +365,17 @@ def play_youtube_audio(
                         except Exception:
                             logger.exception("on_near_end callback failed for %s", youtube_url)
 
-                # --- Pause / resume ----------------------------------------
+                # --- Pause / resume (via IPC, no process suspend) ----------
                 pause_wanted = os.path.exists(settings.pause_signal_file)
                 if pause_wanted and not _paused:
-                    try:
-                        psutil.Process(process.pid).suspend()
-                        logger.info("Paused %s", youtube_url)
-                    except psutil.NoSuchProcess:
-                        pass
+                    _mpv_cmd(mpv_pipe, ["set_property", "pause", True])
+                    logger.info("Paused %s", youtube_url)
                     _paused = True
                     if on_pause:
                         on_pause()
                 elif not pause_wanted and _paused:
-                    try:
-                        psutil.Process(process.pid).resume()
-                        logger.info("Resumed %s", youtube_url)
-                    except psutil.NoSuchProcess:
-                        pass
+                    _mpv_cmd(mpv_pipe, ["set_property", "pause", False])
+                    logger.info("Resumed %s", youtube_url)
                     _paused = False
                     if on_resume:
                         on_resume()
@@ -399,6 +386,14 @@ def play_youtube_audio(
             _clear_skip_signal()
             _clear_seek_signal()
             request_resume()
+            _mpv_close(mpv_pipe)
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
     finally:
         if _tmp_dir:
             shutil.rmtree(_tmp_dir, ignore_errors=True)

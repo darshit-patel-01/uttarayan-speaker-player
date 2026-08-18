@@ -17,7 +17,7 @@ import default_playlist
 import messages
 import runtime_config
 from playback import (
-    get_volume, set_volume,
+    get_download_progress, get_volume, set_volume,
     is_paused, is_stopped,
     request_pause, request_resume, request_seek, request_skip, request_stop,
 )
@@ -218,6 +218,8 @@ def _now_playing_payload() -> dict:
     if playing is not None:
         progress = queue_state.get_playing_progress()
         playing_summary = _song_summary(playing, "queue", progress)
+        if playing["status"] == "downloading":
+            playing_summary["download_percent"] = get_download_progress().get("percent", 0)
     else:
         fallback_playing = default_playlist.get_now_playing()
         if fallback_playing:
@@ -484,6 +486,8 @@ def queue(admin: str = Depends(require_admin)):
             if m:
                 vid = m.group(1)
         song["thumbnail"] = f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None
+        if song["status"] == "downloading":
+            song["download_percent"] = get_download_progress().get("percent", 0)
     return {"queue": songs}
 
 
