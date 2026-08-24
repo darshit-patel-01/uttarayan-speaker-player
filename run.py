@@ -83,9 +83,23 @@ def shutdown(signum=None, frame=None):
     sys.exit(0)
 
 
+def run_tests():
+    print("Running tests...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/", "-v", "--tb=short"],
+        cwd=HERE,
+    )
+    if result.returncode != 0:
+        print("\nTests failed! Fix the issues above before starting the app.")
+        sys.exit(1)
+    print()
+
+
 def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
+
+    run_tests()
 
     print("Starting Kafka + Redis (docker compose up -d)...")
     subprocess.run(["docker", "compose", "up", "-d"], cwd=HERE, check=True)

@@ -6,3 +6,7 @@ pydantic
 python-dotenv
 edge-tts
 redis
+segno
+pytest
+pytest-sugar
+httpx2

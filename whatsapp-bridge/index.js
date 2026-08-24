@@ -57,6 +57,34 @@ const pendingNotifications = new Map();
 // (within 10 minutes) is forwarded to the admin as an appeal.
 const pendingAppeals = new Map();
 
+// Song search: "search <query>" returns numbered results; "play 1" enqueues
+const SEARCH_COMMAND_RE = /^\s*search\s+(.+)/i;
+const PLAY_NUMBER_RE = /^\s*play\s+(\d+)(?:\s+from\s+(.+?))?(?:\s+for\s+(.+?))?$/i;
+const searchSessions = new Map(); // jid -> { results: [...], expiresAt }
+
+async function handleSearchCommand(query) {
+  try {
+    const res = await fetch(`${BASE_URL}/search?q=${encodeURIComponent(query)}&limit=5`);
+    if (!res.ok) return { error: "Search failed." };
+    const data = await res.json();
+    return { results: data.results || [] };
+  } catch (err) {
+    return { error: `Search failed: ${err.message}` };
+  }
+}
+
+function formatSearchResults(results) {
+  if (results.length === 0) return "No results found.";
+  const lines = ["🔍 *Search results:*\n"];
+  results.forEach((r, i) => {
+    const dur = r.duration_fmt || "?";
+    const views = r.views_fmt ? ` · ${r.views_fmt}` : "";
+    lines.push(`*${i + 1}.* ${r.title || "(unknown)"}\n    ${r.uploader || ""} · ${dur}${views}`);
+  });
+  lines.push("\nReply *play 1* to enqueue a song.");
+  return lines.join("\n");
+}
+
 // Status command: reply with now-playing + queue info
 const STATUS_COMMAND_RE = /^\s*(status|queue|wait)\s*$/i;
 
@@ -325,6 +353,53 @@ async function start() {
         const reply = await handleStatusCommand();
         await sock.sendMessage(jid, { text: reply });
         continue;
+      }
+
+      // Search command: "search <query>"
+      const searchMatch = text.match(SEARCH_COMMAND_RE);
+      if (searchMatch) {
+        const query = searchMatch[1].trim();
+        await logLine(`SEARCH phone=${await senderPhoneNumber(sock, msg)} query="${query}"`);
+        const { results, error } = await handleSearchCommand(query);
+        if (error) {
+          await sock.sendMessage(jid, { text: error });
+        } else {
+          searchSessions.set(jid, { results, expiresAt: Date.now() + 5 * 60 * 1000 });
+          await sock.sendMessage(jid, { text: formatSearchResults(results) });
+        }
+        continue;
+      }
+
+      // Play by number from search results: "play 1", "play 2 from Darsh for Mom"
+      const playNumMatch = text.match(PLAY_NUMBER_RE);
+      if (playNumMatch) {
+        const session = searchSessions.get(jid);
+        if (session && Date.now() < session.expiresAt) {
+          const idx = parseInt(playNumMatch[1], 10) - 1;
+          if (idx >= 0 && idx < session.results.length) {
+            const chosen = session.results[idx];
+            const number = await senderPhoneNumber(sock, msg);
+            const asAdmin = ADMIN_PHONE_NUMBERS.some((admin) => number.includes(admin));
+            const dedicationName = playNumMatch[2]?.trim().slice(0, 100) || undefined;
+            const dedication = playNumMatch[3]?.trim().slice(0, 100) || undefined;
+            await logLine(`SEARCH_PLAY phone=${number} admin=${asAdmin} pick=${idx + 1} url=${chosen.url}`);
+            try {
+              const data = await enqueueUrls([chosen.url], { asAdmin, requesterId: number, dedication, dedicationName });
+              for (const song of data.enqueued || []) {
+                if (song.id) pendingNotifications.set(song.id, { jid, title: song.title || song.url });
+              }
+              const prefix = asAdmin ? "👑 Admin request (validation skipped)\n\n" : "";
+              await sock.sendMessage(jid, { text: prefix + formatReply(data) });
+            } catch (err) {
+              await sock.sendMessage(jid, { text: `Couldn't reach the song queue: ${err.message}` });
+            }
+            continue;
+          } else {
+            await sock.sendMessage(jid, { text: `Pick a number between 1 and ${session.results.length}.` });
+            continue;
+          }
+        }
+        // No active search session — fall through to URL matching
       }
 
       const { urls, dedication, dedicationName } = extractYoutubeUrls(text);
