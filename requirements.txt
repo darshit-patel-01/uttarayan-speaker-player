@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 confluent-kafka
 yt-dlp
+bgutil-ytdlp-pot-provider
 pydantic
 python-dotenv
 edge-tts
