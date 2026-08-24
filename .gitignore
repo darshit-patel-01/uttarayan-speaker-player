@@ -12,6 +12,7 @@ venv
 .analytics.json
 .runtime_config.json
 .env
+cookies.txt
 uttarayan.db
 uttarayan.db-wal
 uttarayan.db-shm

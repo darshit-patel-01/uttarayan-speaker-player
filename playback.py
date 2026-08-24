@@ -17,19 +17,11 @@ logger = logging.getLogger("playback")
 
 _MPV_EXE = shutil.which("mpv") or r"C:\Program Files\MPV Player\mpv.exe"
 
-_COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
-
 YDL_DOWNLOAD_OPTS = {
     "format": "bestaudio*/best*",
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
-    "extractor_args": {
-        "youtube": {
-            "player_client": ["ios", "android", "web"],
-        }
-    },
-    **({"cookiefile": _COOKIES_FILE} if os.path.exists(_COOKIES_FILE) else {}),
 }
 
 _POLL_INTERVAL_SECONDS = 0.2
