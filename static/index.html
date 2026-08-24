@@ -75,6 +75,45 @@
     </div>
   </div>
 
+  <button type="button" id="qr-open-btn" class="qr-fab" title="Show QR code">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="3" height="3"/><line x1="21" y1="14" x2="21" y2="14.01"/><line x1="21" y1="21" x2="21" y2="21.01"/><line x1="17" y1="21" x2="17" y2="21.01"/><line x1="21" y1="17" x2="21" y2="17.01"/></svg>
+  </button>
+
+  <dialog id="qr-modal">
+    <h1 style="margin:0 0 10px; text-align:center;">Share Song Queue</h1>
+    <div class="qr-tabs">
+      <button type="button" class="qr-tab-btn active" data-qr-target="whatsapp">WhatsApp</button>
+      <button type="button" class="qr-tab-btn" data-qr-target="telegram">Telegram</button>
+      <button type="button" class="qr-tab-btn" data-qr-target="web">Web</button>
+    </div>
+    <div id="qr-admin-config" style="display:none; margin-bottom:12px;">
+      <div id="qr-config-whatsapp" class="qr-config-panel">
+        <label style="font-size:0.82rem; color:#555;">WhatsApp number (with country code)</label>
+        <div style="display:flex; gap:6px; margin-top:4px;">
+          <input type="text" id="qr-wa-number" placeholder="e.g. 919876543210" style="flex:1; font-size:0.85rem; padding:6px 8px;">
+          <button type="button" id="qr-wa-save" class="small">Save</button>
+        </div>
+      </div>
+      <div id="qr-config-telegram" class="qr-config-panel" style="display:none;">
+        <label style="font-size:0.82rem; color:#555;">Telegram bot username (without @)</label>
+        <div style="display:flex; gap:6px; margin-top:4px;">
+          <input type="text" id="qr-tg-bot" placeholder="e.g. my_song_bot" style="flex:1; font-size:0.85rem; padding:6px 8px;">
+          <button type="button" id="qr-tg-save" class="small">Save</button>
+        </div>
+      </div>
+      <div id="qr-config-web" class="qr-config-panel" style="display:none;">
+        <p style="font-size:0.82rem; color:#555; margin:0;">Auto-detected from server URL — no config needed.</p>
+      </div>
+      <div id="qr-config-result" style="font-size:0.8rem; margin-top:6px;"></div>
+    </div>
+    <div id="qr-img-wrap" style="display:flex; justify-content:center; min-height:200px; align-items:center;"></div>
+    <p style="text-align:center; color:#666; font-size:0.82rem; margin:8px 0 0;" id="qr-url"></p>
+    <div style="display:flex; gap:8px; margin-top:12px; justify-content:center;">
+      <button type="button" id="qr-copy-btn" class="secondary small">Copy link</button>
+      <button type="button" id="qr-close-btn" class="small">Close</button>
+    </div>
+  </dialog>
+
   <div class="profile-widget" id="profile-widget">
     <button type="button" class="profile-icon" id="profile-icon" aria-label="Account">
       <span id="profile-icon-text">🪁</span>
@@ -107,10 +146,26 @@
 
   <div class="tab-panel" data-tab="enqueue">
     <div id="wait-time-banner">Checking current wait time…</div>
-    <form id="enqueue-form">
-      <input type="text" id="url" placeholder="Paste YouTube URL" required>
+
+    <div class="dedication-fields">
       <input type="text" id="dedication-name" placeholder="Your name (optional)" maxlength="100">
       <input type="text" id="dedication" placeholder="Dedicate to... (optional)" maxlength="100">
+    </div>
+
+    <div id="search-section">
+      <form id="search-form">
+        <input type="text" id="search-query" placeholder="Search for a song..." autocomplete="off">
+        <button type="submit" id="search-btn">Search</button>
+      </form>
+      <div id="search-results"></div>
+    </div>
+
+    <div class="enqueue-divider">
+      <span>or paste a YouTube URL directly</span>
+    </div>
+
+    <form id="enqueue-form">
+      <input type="text" id="url" placeholder="Paste YouTube URL" required>
       <button type="submit" id="submit-btn">Enqueue</button>
     </form>
     <div id="result"></div>
@@ -426,8 +481,10 @@
 <script src="js/messages.js"></script>
 <script src="js/dashboard.js"></script>
 <script src="js/settings.js"></script>
+<script src="js/search.js"></script>
 <script src="js/enqueue.js"></script>
 <script src="js/history.js"></script>
+<script src="js/share.js"></script>
 <script src="js/auth.js"></script>
 </body>
 </html>

@@ -17,7 +17,7 @@ import default_playlist
 import messages
 import runtime_config
 from playback import (
-    get_volume, set_volume,
+    get_download_progress, get_volume, set_volume,
     is_paused, is_stopped,
     request_pause, request_resume, request_seek, request_skip, request_stop,
 )
@@ -218,6 +218,8 @@ def _now_playing_payload() -> dict:
     if playing is not None:
         progress = queue_state.get_playing_progress()
         playing_summary = _song_summary(playing, "queue", progress)
+        if playing["status"] == "downloading":
+            playing_summary["download_percent"] = get_download_progress().get("percent", 0)
     else:
         fallback_playing = default_playlist.get_now_playing()
         if fallback_playing:
@@ -484,6 +486,8 @@ def queue(admin: str = Depends(require_admin)):
             if m:
                 vid = m.group(1)
         song["thumbnail"] = f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None
+        if song["status"] == "downloading":
+            song["download_percent"] = get_download_progress().get("percent", 0)
     return {"queue": songs}
 
 
@@ -983,6 +987,124 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
 
     logger.info("Enqueued %d url(s), rejected %d", len(enqueued), len(rejected))
     return {"enqueued": enqueued, "rejected": rejected}
+
+
+def _format_views(count: int) -> str:
+    if count >= 1_000_000_000:
+        return f"{count / 1_000_000_000:.1f}B views"
+    if count >= 1_000_000:
+        return f"{count / 1_000_000:.1f}M views"
+    if count >= 1_000:
+        return f"{count / 1_000:.1f}K views"
+    return f"{count} views" if count else ""
+
+
+@app.get("/search")
+def search_youtube(q: str, limit: int = 5):
+    """Search YouTube by keyword and return top results sorted by view count."""
+    if not q.strip():
+        raise HTTPException(status_code=422, detail="q must not be empty")
+    limit = max(1, min(limit, 10))
+    import yt_dlp
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "noplaylist": True,
+        "default_search": "ytsearch",
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{limit}:{q}", download=False)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"YouTube search failed: {exc}")
+    results = []
+    for entry in (info or {}).get("entries", []) or []:
+        vid = entry.get("id", "")
+        view_count = entry.get("view_count") or 0
+        results.append({
+            "video_id": vid,
+            "url": f"https://www.youtube.com/watch?v={vid}" if vid else entry.get("url", ""),
+            "title": entry.get("title"),
+            "uploader": entry.get("uploader") or entry.get("channel"),
+            "duration": entry.get("duration"),
+            "duration_fmt": queue_state.format_duration(entry.get("duration")),
+            "view_count": view_count,
+            "views_fmt": _format_views(view_count),
+            "thumbnail": f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None,
+        })
+    return {"results": results}
+
+
+class ShareConfigRequest(BaseModel):
+    whatsapp_number: Optional[str] = None
+    telegram_bot: Optional[str] = None
+
+    @field_validator("whatsapp_number")
+    @classmethod
+    def clean_whatsapp(cls, v):
+        if v is None:
+            return None
+        v = v.strip().lstrip("+")
+        return v if v else None
+
+    @field_validator("telegram_bot")
+    @classmethod
+    def clean_telegram(cls, v):
+        if v is None:
+            return None
+        v = v.strip().lstrip("@")
+        return v if v else None
+
+
+def _get_share_config() -> dict:
+    import db as db_mod
+    conn = db_mod.get_conn()
+    row = conn.execute("SELECT value FROM app_state WHERE key='share_config'").fetchone()
+    if row:
+        return json.loads(row["value"])
+    return {}
+
+
+@app.get("/share/config")
+def share_config_get():
+    return _get_share_config()
+
+
+@app.post("/share/config")
+def share_config_set(req: ShareConfigRequest, admin: str = Depends(require_admin)):
+    cfg = {"whatsapp_number": req.whatsapp_number, "telegram_bot": req.telegram_bot}
+    import db as db_mod
+    conn = db_mod.get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO app_state (key, value) VALUES ('share_config', ?)",
+        (json.dumps(cfg),),
+    )
+    return cfg
+
+
+@app.get("/share/qr")
+def share_qr(request: Request, target: str = "web"):
+    import io
+    import segno
+    from fastapi.responses import Response
+    cfg = _get_share_config()
+    if target == "whatsapp":
+        number = cfg.get("whatsapp_number", "")
+        if not number:
+            raise HTTPException(status_code=404, detail="WhatsApp number not configured")
+        url = f"https://wa.me/{number}?text=search%20"
+    elif target == "telegram":
+        bot = cfg.get("telegram_bot", "")
+        if not bot:
+            raise HTTPException(status_code=404, detail="Telegram bot not configured")
+        url = f"https://t.me/{bot}"
+    else:
+        url = str(request.base_url).rstrip("/")
+    qr = segno.make(url)
+    buf = io.BytesIO()
+    qr.save(buf, kind="svg", scale=8, dark="#ff6d00", border=2)
+    return Response(content=buf.getvalue(), media_type="image/svg+xml")
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

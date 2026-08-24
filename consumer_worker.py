@@ -12,7 +12,7 @@ from confluent_kafka import Consumer, KafkaError
 
 from config import settings
 import default_playlist
-from playback import download_audio, is_stopped, play_youtube_audio
+from playback import download_audio, is_stopped, kill_active_player, play_youtube_audio
 import queue_state
 
 # ---------------------------------------------------------------------------
@@ -149,8 +149,9 @@ _shutdown = False
 
 def _handle_shutdown(signum, frame):
     global _shutdown
-    logger.info("Shutdown requested, will stop after the current video finishes...")
+    logger.info("Shutdown requested, killing active player...")
     _shutdown = True
+    kill_active_player()
 
 
 def _wait_while_stopped() -> None:

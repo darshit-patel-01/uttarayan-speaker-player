@@ -4,6 +4,9 @@ confluent-kafka
 yt-dlp
 pydantic
 python-dotenv
-psutil
 edge-tts
 redis
+segno
+pytest
+pytest-sugar
+httpx2

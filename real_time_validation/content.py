@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Tuple
 
 import yt_dlp
@@ -7,11 +8,20 @@ import runtime_config
 
 logger = logging.getLogger("real_time_validation.content")
 
+_COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
+
 _PROBE_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
     "skip_download": True,
+    "format": "bestaudio*/best*",
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["ios", "android", "web"],
+        }
+    },
+    **({"cookiefile": _COOKIES_FILE} if os.path.exists(_COOKIES_FILE) else {}),
 }
 
 # YouTube has no public "is this adult content" flag. The closest available

@@ -53,6 +53,34 @@ const pendingNotifications = new Map();
 // Blocked-user appeal: chatId -> { senderId, expiresAt }
 const pendingAppeals = new Map();
 
+// Song search: "/search <query>" or "search <query>" returns numbered results
+const SEARCH_COMMAND_RE = /^\s*\/?search\s+(.+)/i;
+const PLAY_NUMBER_RE = /^\s*\/?play\s+(\d+)(?:\s+from\s+(.+?))?(?:\s+for\s+(.+?))?$/i;
+const searchSessions = new Map(); // chatId -> { results: [...], expiresAt }
+
+async function handleSearchCommand(query) {
+  try {
+    const res = await fetch(`${BASE_URL}/search?q=${encodeURIComponent(query)}&limit=5`);
+    if (!res.ok) return { error: "Search failed." };
+    const data = await res.json();
+    return { results: data.results || [] };
+  } catch (err) {
+    return { error: `Search failed: ${err.message}` };
+  }
+}
+
+function formatSearchResults(results) {
+  if (results.length === 0) return "No results found.";
+  const lines = ["🔍 *Search results:*\n"];
+  results.forEach((r, i) => {
+    const dur = r.duration_fmt || "?";
+    const views = r.views_fmt ? ` · ${r.views_fmt}` : "";
+    lines.push(`*${i + 1}.* ${r.title || "(unknown)"}\n    ${r.uploader || ""} · ${dur}${views}`);
+  });
+  lines.push("\nReply */play 1* to enqueue a song.");
+  return lines.join("\n");
+}
+
 // Status command: reply with now-playing + queue info
 const STATUS_COMMAND_RE = /^\s*\/?(status|queue|wait)\s*$/i;
 
@@ -233,6 +261,54 @@ bot.on("message", async (msg) => {
     const reply = await handleStatusCommand();
     await bot.sendMessage(chatId, reply);
     return;
+  }
+
+  // Search command: "/search <query>" or "search <query>"
+  const searchMatch = text.match(SEARCH_COMMAND_RE);
+  if (searchMatch) {
+    const query = searchMatch[1].trim();
+    const senderId = String(msg.from?.id || "");
+    await logLine(`SEARCH telegram_id=${senderId} query="${query}"`);
+    const { results, error } = await handleSearchCommand(query);
+    if (error) {
+      await bot.sendMessage(chatId, error);
+    } else {
+      searchSessions.set(chatId, { results, expiresAt: Date.now() + 5 * 60 * 1000 });
+      await bot.sendMessage(chatId, formatSearchResults(results), { parse_mode: "Markdown" });
+    }
+    return;
+  }
+
+  // Play by number from search results: "/play 1", "play 2 from Darsh for Mom"
+  const playNumMatch = text.match(PLAY_NUMBER_RE);
+  if (playNumMatch) {
+    const session = searchSessions.get(chatId);
+    if (session && Date.now() < session.expiresAt) {
+      const idx = parseInt(playNumMatch[1], 10) - 1;
+      if (idx >= 0 && idx < session.results.length) {
+        const chosen = session.results[idx];
+        const senderId = String(msg.from?.id || "");
+        const asAdmin = ADMIN_TELEGRAM_IDS.includes(senderId);
+        const dedicationName = playNumMatch[2]?.trim().slice(0, 100) || undefined;
+        const dedication = playNumMatch[3]?.trim().slice(0, 100) || undefined;
+        await logLine(`SEARCH_PLAY telegram_id=${senderId} admin=${asAdmin} pick=${idx + 1} url=${chosen.url}`);
+        try {
+          const data = await enqueueUrls([chosen.url], { asAdmin, requesterId: senderId, dedication, dedicationName });
+          for (const song of data.enqueued || []) {
+            if (song.id) pendingNotifications.set(song.id, { chatId, title: song.title || song.url });
+          }
+          const prefix = asAdmin ? "👑 Admin request (validation skipped)\n\n" : "";
+          await bot.sendMessage(chatId, prefix + formatReply(data));
+        } catch (err) {
+          await bot.sendMessage(chatId, `Couldn't reach the song queue: ${err.message}`);
+        }
+        return;
+      } else {
+        await bot.sendMessage(chatId, `Pick a number between 1 and ${session.results.length}.`);
+        return;
+      }
+    }
+    // No active search session — fall through to URL matching
   }
 
   const { urls, dedication, dedicationName } = extractYoutubeUrls(text);

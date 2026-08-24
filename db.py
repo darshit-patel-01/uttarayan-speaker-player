@@ -19,14 +19,20 @@ _local = threading.local()
 
 
 def get_conn() -> sqlite3.Connection:
-    if not hasattr(_local, "conn") or _local.conn is None:
-        conn = sqlite3.connect(settings.db_file, isolation_level=None, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=10000")
-        conn.row_factory = sqlite3.Row
-        _local.conn = conn
-    return _local.conn
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except sqlite3.ProgrammingError:
+            _local.conn = None
+    conn = sqlite3.connect(settings.db_file, isolation_level=None, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.row_factory = sqlite3.Row
+    _local.conn = conn
+    return conn
 
 
 @contextmanager
