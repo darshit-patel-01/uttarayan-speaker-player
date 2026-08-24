@@ -1,77 +1,15 @@
 """
-Admin-managed blacklist, persisted to a small JSON file (same file-based IPC
-pattern as queue_state.py / default_playlist.py — the API process writes it,
-this module reads it during validation).
+Admin-managed blacklist, persisted to SQLite.
 
 Two independent lists:
   - video_ids:  YouTube video IDs that may never be enqueued.
-  - requesters: requester keys (as produced by identity.detect_requester_id,
-                e.g. "whatsapp:15551234567", "telegram:999888777",
-                "ip:1.2.3.4") whose requests are refused outright.
-
-Blacklist checks run first in real_time_validation and apply to non-admin
-requests only, consistent with how the other validation checks are skipped
-for admins — an admin is never blacklisting themselves, and staying
-admin-exempt keeps blacklisting from ever locking the operator out.
+  - requesters: requester keys (e.g. "whatsapp:15551234567") whose
+                requests are refused outright.
 """
-import json
-import os
-import threading
+import sqlite3
 from typing import List
 
-from config import settings
-
-_lock = threading.Lock()
-
-
-def _empty() -> dict:
-    return {"video_ids": [], "requesters": []}
-
-
-def _load() -> dict:
-    if not os.path.exists(settings.blacklist_file):
-        return _empty()
-    try:
-        with open(settings.blacklist_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            data.setdefault("video_ids", [])
-            data.setdefault("requesters", [])
-            return data
-    except (json.JSONDecodeError, OSError):
-        return _empty()
-
-
-def _save(data: dict) -> None:
-    tmp_path = settings.blacklist_file + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp_path, settings.blacklist_file)
-
-
-def _add(key: str, value: str) -> bool:
-    """Add value to list `key`. Returns True if added, False if already present."""
-    value = (value or "").strip()
-    if not value:
-        return False
-    with _lock:
-        data = _load()
-        if value in data[key]:
-            return False
-        data[key].append(value)
-        _save(data)
-        return True
-
-
-def _remove(key: str, value: str) -> bool:
-    """Remove value from list `key`. Returns True if removed, False if absent."""
-    value = (value or "").strip()
-    with _lock:
-        data = _load()
-        if value not in data[key]:
-            return False
-        data[key].remove(value)
-        _save(data)
-        return True
+import db
 
 
 # --- Video IDs -------------------------------------------------------------
@@ -79,16 +17,34 @@ def _remove(key: str, value: str) -> bool:
 def is_video_blacklisted(video_id: str) -> bool:
     if not video_id:
         return False
-    with _lock:
-        return video_id in _load()["video_ids"]
+    conn = db.get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM blacklist_videos WHERE video_id=?", (video_id,)
+    ).fetchone()
+    return row is not None
 
 
 def add_video(video_id: str) -> bool:
-    return _add("video_ids", video_id)
+    video_id = (video_id or "").strip()
+    if not video_id:
+        return False
+    conn = db.get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO blacklist_videos (video_id) VALUES (?)", (video_id,)
+        )
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 
 def remove_video(video_id: str) -> bool:
-    return _remove("video_ids", video_id)
+    video_id = (video_id or "").strip()
+    conn = db.get_conn()
+    cursor = conn.execute(
+        "DELETE FROM blacklist_videos WHERE video_id=?", (video_id,)
+    )
+    return cursor.rowcount > 0
 
 
 # --- Requesters (phone number / Telegram id / IP) --------------------------
@@ -96,24 +52,51 @@ def remove_video(video_id: str) -> bool:
 def is_requester_blacklisted(requester_id: str) -> bool:
     if not requester_id:
         return False
-    with _lock:
-        return requester_id in _load()["requesters"]
+    conn = db.get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM blacklist_requesters WHERE requester_id=?",
+        (requester_id,),
+    ).fetchone()
+    return row is not None
 
 
 def add_requester(requester_id: str) -> bool:
-    return _add("requesters", requester_id)
+    requester_id = (requester_id or "").strip()
+    if not requester_id:
+        return False
+    conn = db.get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO blacklist_requesters (requester_id) VALUES (?)",
+            (requester_id,),
+        )
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 
 def remove_requester(requester_id: str) -> bool:
-    return _remove("requesters", requester_id)
+    requester_id = (requester_id or "").strip()
+    conn = db.get_conn()
+    cursor = conn.execute(
+        "DELETE FROM blacklist_requesters WHERE requester_id=?",
+        (requester_id,),
+    )
+    return cursor.rowcount > 0
 
 
 # --- Read-only listing (for the admin UI) ----------------------------------
 
 def list_all() -> dict:
-    with _lock:
-        data = _load()
-        return {
-            "video_ids": list(data["video_ids"]),
-            "requesters": list(data["requesters"]),
-        }
+    conn = db.get_conn()
+    videos = [
+        r["video_id"]
+        for r in conn.execute("SELECT video_id FROM blacklist_videos").fetchall()
+    ]
+    requesters = [
+        r["requester_id"]
+        for r in conn.execute(
+            "SELECT requester_id FROM blacklist_requesters"
+        ).fetchall()
+    ]
+    return {"video_ids": videos, "requesters": requesters}

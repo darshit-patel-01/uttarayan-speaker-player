@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import secrets
 from typing import List, Optional
 
@@ -13,6 +14,7 @@ from pydantic import BaseModel, field_validator
 import analytics
 from config import settings
 import default_playlist
+import messages
 import runtime_config
 from playback import (
     get_volume, set_volume,
@@ -73,22 +75,35 @@ def optional_admin(credentials: Optional[HTTPBasicCredentials] = Depends(optiona
     return credentials.username
 
 
+MAX_DEDICATION_LENGTH = 100
+
+
 class EnqueueRequest(BaseModel):
     urls: List[str]
+    dedication: Optional[str] = None
+    dedication_name: Optional[str] = None
 
     @field_validator("urls")
     @classmethod
     def validate_urls(cls, urls: List[str]) -> List[str]:
-        # Cheap, no-network check: is this even shaped like a YouTube URL?
-        # Content-level checks (adult / song-only) happen in the endpoint,
-        # since they require probing YouTube and should be reported per-URL
-        # rather than failing the whole request.
         if not urls:
             raise ValueError("urls must contain at least one YouTube URL")
         for url in urls:
             if not is_valid_youtube_url(url):
                 raise ValueError(f"Not a valid YouTube URL: {url}")
         return urls
+
+    @field_validator("dedication", "dedication_name")
+    @classmethod
+    def validate_dedication(cls, d: Optional[str]) -> Optional[str]:
+        if d is None:
+            return None
+        d = d.strip()
+        if not d:
+            return None
+        if len(d) > MAX_DEDICATION_LENGTH:
+            raise ValueError(f"Must be {MAX_DEDICATION_LENGTH} characters or less")
+        return d
 
 
 @app.get("/health")
@@ -138,13 +153,27 @@ def wait_time():
 import time as _time
 
 
+_VIDEO_ID_RE = re.compile(
+    r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]+)"
+)
+
+
 def _song_summary(song: dict, source: str, progress: Optional[dict] = None) -> dict:
+    video_id = song.get("video_id")
+    if not video_id:
+        m = _VIDEO_ID_RE.search(song.get("url", ""))
+        if m:
+            video_id = m.group(1)
     result = {
         "id": song.get("id"),
         "title": song.get("title"),
         "uploader": song.get("uploader"),
         "url": song["url"],
         "source": source,
+        "dedication": song.get("dedication"),
+        "dedication_name": song.get("dedication_name"),
+        "thumbnail": f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg" if video_id else None,
+        "status": song.get("status"),
     }
     if progress:
         result.update(progress)
@@ -183,7 +212,7 @@ def _now_playing_payload() -> dict:
     getting this data can never drift apart.
     """
     songs = queue_state.list_queue()
-    playing = next((s for s in songs if s["status"] == "playing"), None)
+    playing = next((s for s in songs if s["status"] in ("playing", "downloading")), None)
     upcoming = [s for s in songs if s["status"] == "queued"]
 
     if playing is not None:
@@ -203,7 +232,14 @@ def _now_playing_payload() -> dict:
         fallback_next = default_playlist.peek_next_song()
         next_summary = _song_summary(fallback_next, "playlist") if fallback_next else None
 
-    return {"playing": playing_summary, "next": next_summary}
+    queue_len, total_wait = queue_state.current_wait()
+
+    return {
+        "playing": playing_summary,
+        "next": next_summary,
+        "queue_length": queue_len,
+        "estimated_wait_seconds": round(total_wait, 1),
+    }
 
 
 @app.get("/now-playing")
@@ -255,6 +291,36 @@ async def _now_playing_broadcast_loop() -> None:
 @app.on_event("startup")
 async def _start_broadcast_loop() -> None:
     asyncio.create_task(_now_playing_broadcast_loop())
+
+
+# ---------------------------------------------------------------------------
+# UDP LAN discovery — lets the Android admin app find this server
+# automatically on the local network without typing the IP address.
+# Listens on UDP port 19876; when it receives "UTTARAYAN_DISCOVER", it
+# replies with the HTTP base URL so the app can auto-fill the server field.
+# ---------------------------------------------------------------------------
+DISCOVERY_PORT = 19876
+DISCOVERY_MAGIC = b"UTTARAYAN_DISCOVER"
+
+
+def _udp_discovery_thread() -> None:
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", DISCOVERY_PORT))
+    logger.info("UDP discovery listener started on port %d", DISCOVERY_PORT)
+    while True:
+        try:
+            data, addr = sock.recvfrom(1024)
+            if data.strip() == DISCOVERY_MAGIC:
+                sock.sendto(b"UTTARAYAN_SERVER_OK", addr)
+                logger.info("Discovery reply sent to %s", addr)
+        except Exception:
+            logger.exception("UDP discovery error")
+
+
+import threading as _threading
+_threading.Thread(target=_udp_discovery_thread, daemon=True, name="udp-discovery").start()
 
 
 @app.websocket("/ws/now-playing")
@@ -412,7 +478,36 @@ def queue(admin: str = Depends(require_admin)):
     for song in songs:
         song["duration"] = queue_state.format_duration(song["duration_seconds"])
         song["estimated_wait"] = queue_state.format_duration(song["estimated_wait_seconds"])
+        vid = song.get("video_id")
+        if not vid:
+            m = _VIDEO_ID_RE.search(song.get("url", ""))
+            if m:
+                vid = m.group(1)
+        song["thumbnail"] = f"https://img.youtube.com/vi/{vid}/mqdefault.jpg" if vid else None
     return {"queue": songs}
+
+
+class BulkSkipRequest(BaseModel):
+    song_ids: List[str]
+
+
+@app.post("/queue/skip-multiple")
+def skip_multiple(req: BulkSkipRequest, admin: str = Depends(require_admin)):
+    """Skips multiple songs at once by their IDs."""
+    skipped = []
+    for song_id in req.song_ids:
+        if queue_state.mark_skip_requested(song_id):
+            skipped.append(song_id)
+    logger.info("Bulk skip %d song(s) by %s", len(skipped), admin)
+    return {"skipped": skipped, "count": len(skipped)}
+
+
+@app.post("/queue/clear")
+def clear_queue(admin: str = Depends(require_admin)):
+    """Removes all queued (non-playing) songs from the queue."""
+    count = queue_state.clear_queued()
+    logger.info("Queue cleared (%d songs removed) by %s", count, admin)
+    return {"status": "cleared", "removed": count}
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +610,82 @@ def blacklist_remove_requester(source: str, value: str, admin: str = Depends(req
 
 
 # ---------------------------------------------------------------------------
+# Appeal messages from blocked users
+# ---------------------------------------------------------------------------
+
+class AppealMessageRequest(BaseModel):
+    source: str
+    requester_id: str
+    text: str
+
+
+class ReplyMessageRequest(BaseModel):
+    source: str
+    requester_id: str
+    text: str
+
+
+@app.post("/messages/appeal")
+def post_appeal_message(req: AppealMessageRequest):
+    """Receives an appeal message from a blocked user (called by bridges)."""
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    if len(text) > messages.MAX_MESSAGE_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Message too long (max {messages.MAX_MESSAGE_LENGTH} characters).")
+    entry = messages.add_message(req.source, req.requester_id, text)
+    logger.info("Appeal message from %s:%s", req.source, req.requester_id)
+    return {"status": "sent", "message_id": entry.get("id")}
+
+
+@app.get("/messages")
+def get_messages(admin: str = Depends(require_admin)):
+    """Returns all appeal messages for the admin."""
+    return {"messages": messages.list_messages()}
+
+
+@app.post("/messages/{message_id}/read")
+def mark_message_read(message_id: str, admin: str = Depends(require_admin)):
+    if not messages.mark_read(message_id):
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {"status": "ok"}
+
+
+@app.delete("/messages/{message_id}")
+def delete_message(message_id: str, admin: str = Depends(require_admin)):
+    if not messages.delete_message(message_id):
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {"status": "deleted"}
+
+
+@app.post("/messages/reply")
+def reply_to_message(req: ReplyMessageRequest, admin: str = Depends(require_admin)):
+    """Admin sends a reply to a blocked user. Stored in outbox for bridge delivery."""
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Reply cannot be empty.")
+    if len(text) > messages.MAX_MESSAGE_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Reply too long (max {messages.MAX_MESSAGE_LENGTH} characters).")
+    entry = messages.add_reply(req.source, req.requester_id, text)
+    logger.info("Admin reply to %s:%s by %s", req.source, req.requester_id, admin)
+    return {"status": "queued", "reply_id": entry.get("id")}
+
+
+@app.get("/messages/outbox")
+def get_outbox(source: str):
+    """Bridges poll this to pick up pending admin replies for their platform."""
+    return {"replies": messages.pending_replies(source)}
+
+
+@app.post("/messages/outbox/{reply_id}/delivered")
+def mark_reply_delivered(reply_id: str):
+    """Bridge marks a reply as delivered after sending it."""
+    if not messages.mark_delivered(reply_id):
+        raise HTTPException(status_code=404, detail="Reply not found")
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
 # Admin dashboard stats — aggregated from the append-only analytics log
 # (one event per real-queue song that started playing). Default-playlist
 # songs are excluded (they aren't anyone's request).
@@ -527,11 +698,11 @@ def stats(admin: str = Depends(require_admin)):
     most-requested songs. Durations are also returned pre-formatted.
     """
     data = analytics.get_stats()
-    data["total_playtime"] = queue_state.format_duration(data["total_playtime_seconds"])
+    data["total_playtime"] = queue_state.format_duration_hm(data["total_playtime_seconds"])
     for row in data["by_source"]:
-        row["playtime"] = queue_state.format_duration(row["playtime_seconds"])
+        row["playtime"] = queue_state.format_duration_hm(row["playtime_seconds"])
     for row in data["top_requesters"]:
-        row["playtime"] = queue_state.format_duration(row["playtime_seconds"])
+        row["playtime"] = queue_state.format_duration_hm(row["playtime_seconds"])
     return data
 
 
@@ -731,6 +902,21 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
     source = detect_source(request)
     requester_id = detect_requester_id(request, source)
 
+    if runtime_config.get("dedications_enabled"):
+        dedication = req.dedication
+        dedication_name = req.dedication_name
+    else:
+        dedication = None
+        dedication_name = None
+    if dedication or dedication_name:
+        from profanity import contains_profanity
+        for text in (dedication, dedication_name):
+            if text and contains_profanity(text):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Dedication contains inappropriate language. Please rephrase.",
+                )
+
     def _on_delivery(err, msg, song_id, url):
         if err is not None:
             delivery_failures.append({"id": song_id, "url": url, "reason": f"Kafka delivery failed: {err}"})
@@ -748,6 +934,8 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
         song_id, position, wait_seconds = queue_state.add_song(
             url, duration, title, uploader, result.video_id,
             source=source, requester_id=requester_id,
+            dedication=dedication,
+            dedication_name=dedication_name,
         )
 
         try:
@@ -764,6 +952,8 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
                     "title": title,
                     "uploader": uploader,
                     "source": source,
+                    "dedication": dedication,
+                    "dedication_name": dedication_name,
                     "position_in_queue": position,
                     "duration_seconds": duration,
                     "duration": queue_state.format_duration(duration),

@@ -68,7 +68,12 @@ def validate_song_request(url: str, *, requester_id: str, is_admin: bool) -> Val
     # exempt so the operator can never accidentally lock themselves out.
     if not is_admin and blacklist.is_requester_blacklisted(requester_id):
         return ValidationResult(
-            False, "You are not allowed to request songs.", {}, video_id
+            False,
+            "BLOCKED: You are blocked by admin because of improper usage of this application.\n"
+            "If you think that you are blocked for an unnecessary reason, send a message to the admin by replying to this message.\n"
+            "(Max 400 characters. Your next message will be forwarded to the admin.)",
+            {},
+            video_id,
         )
 
     dup_reason = duplicate_reason(video_id)
