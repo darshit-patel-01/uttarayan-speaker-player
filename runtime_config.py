@@ -55,6 +55,13 @@ SPEC: dict = {
         "label": "Song dedications",
         "help": "Allow requesters to add a dedication message announced via TTS before the song.",
     },
+    "tts_language": {
+        "type": "choice",
+        "choices": ["hi", "en"],
+        "labels": {"hi": "Hindi", "en": "English"},
+        "label": "TTS language",
+        "help": "Language for song announcements — Hindi or English.",
+    },
 }
 
 
@@ -83,6 +90,11 @@ def _coerce(key: str, value: Any) -> Any:
             if isinstance(value, str)
             else bool(value)
         )
+    elif t == "choice":
+        coerced = str(value).strip()
+        if coerced not in spec.get("choices", []):
+            raise ValueError(f"{spec['label']} must be one of {spec['choices']}")
+        return coerced
     else:
         raise ValueError(f"Unknown type for {key}")
     if t in ("int", "float"):

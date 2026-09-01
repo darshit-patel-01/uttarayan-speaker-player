@@ -14,6 +14,16 @@ function _isAdmin() {
   return !!sessionStorage.getItem(AUTH_STORAGE_KEY);
 }
 
+function _showBridgeWarning(bridge, message) {
+  const existing = document.getElementById('bridge-warning-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.id = 'bridge-warning-toast';
+  toast.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10001;background:#fff3e0;color:#e65100;border:1px solid #ffb74d;border-radius:8px;padding:14px 20px;max-width:420px;font-size:0.85rem;box-shadow:0 4px 16px rgba(0,0,0,0.15);line-height:1.4;';
+  toast.innerHTML = `<strong>${bridge} number updated</strong><br>${message}<br><button onclick="this.parentElement.remove()" style="margin-top:8px;padding:4px 14px;border:1px solid #e65100;border-radius:4px;background:transparent;color:#e65100;cursor:pointer;font-size:0.8rem;">Got it</button>`;
+  document.body.appendChild(toast);
+}
+
 async function _loadShareConfig() {
   try {
     const res = await fetch('/share/config');
@@ -105,6 +115,7 @@ document.getElementById('qr-wa-save').addEventListener('click', async () => {
       qrConfigResult.style.cssText = 'font-size:0.8rem; margin-top:6px; color:#2e7d32;';
       qrConfigResult.textContent = 'Saved!';
       _renderQr('whatsapp');
+      _showBridgeWarning('WhatsApp', 'Update the WhatsApp bridge .env file with this number, then restart the bridge — otherwise incoming messages won\'t be consumed.');
     } else {
       qrConfigResult.style.cssText = 'font-size:0.8rem; margin-top:6px; color:#b71c1c;';
       qrConfigResult.textContent = 'Save failed.';
@@ -130,6 +141,7 @@ document.getElementById('qr-tg-save').addEventListener('click', async () => {
       qrConfigResult.style.cssText = 'font-size:0.8rem; margin-top:6px; color:#2e7d32;';
       qrConfigResult.textContent = 'Saved!';
       _renderQr('telegram');
+      _showBridgeWarning('Telegram', 'Update the Telegram bridge .env file with this bot token, then restart the bridge — otherwise incoming messages won\'t be consumed.');
     } else {
       qrConfigResult.style.cssText = 'font-size:0.8rem; margin-top:6px; color:#b71c1c;';
       qrConfigResult.textContent = 'Save failed.';

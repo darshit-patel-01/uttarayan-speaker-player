@@ -78,13 +78,22 @@ def _tts_announce(title: str, dedication: str = None, dedication_name: str = Non
     import runtime_config
 
     async def _generate(path: str) -> None:
-        if runtime_config.get("dedications_enabled") and dedication_name and dedication:
-            tts_text = f"यह गाना {dedication_name} की तरफ से {dedication} के लिए है… {title}!"
+        lang = runtime_config.get("tts_language") or "hi"
+        if lang == "en":
+            voice = "en-IN-NeerjaNeural"
+            if runtime_config.get("dedications_enabled") and dedication_name and dedication:
+                tts_text = f"This song is from {dedication_name} for {dedication}… {title}!"
+            else:
+                tts_text = f"Next up… {title}!"
         else:
-            tts_text = f"अगला गाना है… {title}!"
+            voice = "hi-IN-SwaraNeural"
+            if runtime_config.get("dedications_enabled") and dedication_name and dedication:
+                tts_text = f"यह गाना {dedication_name} की तरफ से {dedication} के लिए है… {title}!"
+            else:
+                tts_text = f"अगला गाना है… {title}!"
         communicate = edge_tts.Communicate(
             text=tts_text,
-            voice="hi-IN-SwaraNeural",
+            voice=voice,
             rate="-10%",
             pitch="+8Hz",
         )

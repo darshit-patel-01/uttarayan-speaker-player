@@ -16,6 +16,7 @@ function renderSettings(settings) {
   const order = [
     'rate_limit_max_songs', 'rate_limit_window_seconds', 'max_queue_wait_seconds',
     'max_duration_seconds', 'normalize_volume', 'loudnorm_target_lufs', 'crossfade_lead_seconds',
+    'dedications_enabled', 'tts_language',
   ];
   const keys = order.filter(k => k in settings).concat(Object.keys(settings).filter(k => !order.includes(k)));
 
@@ -48,6 +49,15 @@ function renderSettings(settings) {
       input = document.createElement('input');
       input.type = 'checkbox';
       input.checked = !!s.value;
+    } else if (s.type === 'choice') {
+      input = document.createElement('select');
+      for (const c of (s.choices || [])) {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = (s.labels && s.labels[c]) || c;
+        if (c === s.value) opt.selected = true;
+        input.appendChild(opt);
+      }
     } else {
       input = document.createElement('input');
       input.type = 'number';
@@ -87,10 +97,12 @@ async function loadSettings() {
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const changes = {};
-  settingsFields.querySelectorAll('input[data-key]').forEach(input => {
+  settingsFields.querySelectorAll('[data-key]').forEach(input => {
     const key = input.dataset.key;
     if (input.dataset.type === 'bool') {
       changes[key] = input.checked;
+    } else if (input.dataset.type === 'choice') {
+      changes[key] = input.value;
     } else {
       changes[key] = input.value === '' ? null : Number(input.value);
     }

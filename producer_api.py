@@ -111,6 +111,30 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/my-songs")
+def my_songs(requester_id: str):
+    """Public — returns songs in the queue belonging to a specific requester."""
+    all_songs = queue_state.list_queue()
+    mine = [s for s in all_songs if s.get("requester_id") == requester_id]
+    for s in mine:
+        s["duration"] = queue_state.format_duration(s["duration_seconds"])
+        s["estimated_wait"] = queue_state.format_duration(s["estimated_wait_seconds"])
+    return {"songs": mine}
+
+
+@app.post("/cancel-last")
+def cancel_last(requester_id: str):
+    """Public — cancels the requester's most recently queued song (if still queued)."""
+    all_songs = queue_state.list_queue()
+    mine = [s for s in all_songs if s.get("requester_id") == requester_id and s["status"] == "queued"]
+    if not mine:
+        return {"cancelled": False, "reason": "You have no songs waiting in the queue."}
+    last = mine[-1]
+    queue_state.mark_skip_requested(last["id"])
+    logger.info("Requester %s cancelled song %s (%s)", requester_id, last["id"], last.get("title"))
+    return {"cancelled": True, "title": last.get("title") or last.get("url")}
+
+
 @app.get("/history")
 def history(page: int = 1, per_page: int = 10, q: str = ""):
     """

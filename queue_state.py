@@ -166,6 +166,7 @@ def list_queue() -> list:
             "duration_seconds": item.get("duration"),
             "estimated_wait_seconds": estimated_wait_seconds,
             "source": item.get("source"),
+            "requester_id": item.get("requester_id"),
             "dedication": item.get("dedication"),
             "dedication_name": item.get("dedication_name"),
         })

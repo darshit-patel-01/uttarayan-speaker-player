@@ -57,6 +57,37 @@ const pendingNotifications = new Map();
 // (within 10 minutes) is forwarded to the admin as an appeal.
 const pendingAppeals = new Map();
 
+// Welcome message sent on first interaction from a user
+const WELCOME_MESSAGE = `🎵 *Welcome to the Song Queue!*
+
+Here's how to request songs:
+
+🔍 *Search for a song:*
+   search Tara Vina Shyam
+
+▶️ *Play from search results:*
+   play 1
+   play 2 from Darsh for Mom
+
+🔗 *Play a YouTube link directly:*
+   play https://youtu.be/abc123
+   play https://youtu.be/abc123 from Darsh for Mom
+
+📊 *Other commands:*
+   status — what's playing & queue info
+   next — what's coming up next
+   history — last 5 songs played
+   my songs — your songs in the queue
+   cancel — cancel your last queued song
+   help — show this message again
+
+💡 *Tips:*
+• "from Name" adds your name to the request
+• "for Person" dedicates the song to someone
+• You'll get notified when your song starts playing!`;
+
+const greeted = new Set(); // jid — tracks who already got the welcome
+
 // Song search: "search <query>" returns numbered results; "play 1" enqueues
 const SEARCH_COMMAND_RE = /^\s*search\s+(.+)/i;
 const PLAY_NUMBER_RE = /^\s*play\s+(\d+)(?:\s+from\s+(.+?))?(?:\s+for\s+(.+?))?$/i;
@@ -112,6 +143,74 @@ async function handleStatusCommand() {
     return lines.join("\n");
   } catch (err) {
     return `Couldn't reach the queue: ${err.message}`;
+  }
+}
+
+async function handleHistoryCommand() {
+  try {
+    const res = await fetch(`${BASE_URL}/history?per_page=5`);
+    const data = await res.json();
+    const songs = data.songs || [];
+    if (songs.length === 0) return "📜 No songs have been played yet.";
+    const lines = ["📜 *Recently played:*\n"];
+    songs.forEach((s, i) => {
+      const dur = s.duration_fmt || "";
+      lines.push(`${i + 1}. ${s.title || s.url}${dur ? ` (${dur})` : ""}`);
+    });
+    return lines.join("\n");
+  } catch (err) {
+    return `Couldn't fetch history: ${err.message}`;
+  }
+}
+
+async function handleNextCommand() {
+  try {
+    const res = await fetch(`${BASE_URL}/now-playing`);
+    const data = await res.json();
+    const lines = [];
+    if (data.playing) {
+      lines.push(`🎵 *Now playing:* ${data.playing.title || data.playing.url}`);
+    } else {
+      lines.push("🔇 Nothing playing right now.");
+    }
+    if (data.next) {
+      lines.push(`⏭ *Up next:* ${data.next.title || data.next.url}`);
+    } else {
+      lines.push("📭 Nothing queued next.");
+    }
+    return lines.join("\n");
+  } catch (err) {
+    return `Couldn't fetch queue: ${err.message}`;
+  }
+}
+
+async function handleMySongsCommand(requesterId) {
+  try {
+    const res = await fetch(`${BASE_URL}/my-songs?requester_id=${encodeURIComponent(requesterId)}`);
+    const data = await res.json();
+    const songs = data.songs || [];
+    if (songs.length === 0) return "🎶 You have no songs in the queue right now.";
+    const lines = ["🎶 *Your songs in queue:*\n"];
+    songs.forEach((s) => {
+      const status = s.status === "playing" ? "▶️ Playing now" : `#${s.position_in_queue} — ~${s.estimated_wait} wait`;
+      lines.push(`• ${s.title || s.url}\n   ${status}`);
+    });
+    return lines.join("\n");
+  } catch (err) {
+    return `Couldn't fetch your songs: ${err.message}`;
+  }
+}
+
+async function handleCancelCommand(requesterId) {
+  try {
+    const res = await fetch(`${BASE_URL}/cancel-last?requester_id=${encodeURIComponent(requesterId)}`, { method: "POST" });
+    const data = await res.json();
+    if (data.cancelled) {
+      return `🗑️ Cancelled: ${data.title}`;
+    }
+    return `❌ ${data.reason}`;
+  } catch (err) {
+    return `Couldn't cancel: ${err.message}`;
   }
 }
 
@@ -298,6 +397,10 @@ async function start() {
       if (!msg.message || msg.key.fromMe) continue;
 
       const jid = msg.key.remoteJid;
+
+      // Ignore group messages — only respond in private/DM chats
+      if (jid.endsWith("@g.us")) continue;
+
       const text =
         msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
@@ -348,9 +451,51 @@ async function start() {
         pendingAppeals.delete(jid);
       }
 
+      // Send welcome message on first interaction
+      if (!greeted.has(jid)) {
+        greeted.add(jid);
+        await sock.sendMessage(jid, { text: WELCOME_MESSAGE });
+      }
+
+      // Help command: "help" or "menu"
+      if (/^\s*\/?(help|menu|welcome)\s*$/i.test(text)) {
+        await sock.sendMessage(jid, { text: WELCOME_MESSAGE });
+        continue;
+      }
+
       // Status commands: "status", "queue", "wait"
       if (STATUS_COMMAND_RE.test(text)) {
         const reply = await handleStatusCommand();
+        await sock.sendMessage(jid, { text: reply });
+        continue;
+      }
+
+      // History command
+      if (/^\s*\/?(history|recent)\s*$/i.test(text)) {
+        const reply = await handleHistoryCommand();
+        await sock.sendMessage(jid, { text: reply });
+        continue;
+      }
+
+      // Next command
+      if (/^\s*\/?next\s*$/i.test(text)) {
+        const reply = await handleNextCommand();
+        await sock.sendMessage(jid, { text: reply });
+        continue;
+      }
+
+      // My songs command
+      if (/^\s*\/?(my\s*songs?|mine)\s*$/i.test(text)) {
+        const number = await senderPhoneNumber(sock, msg);
+        const reply = await handleMySongsCommand(number);
+        await sock.sendMessage(jid, { text: reply });
+        continue;
+      }
+
+      // Cancel command
+      if (/^\s*\/?cancel\s*$/i.test(text)) {
+        const number = await senderPhoneNumber(sock, msg);
+        const reply = await handleCancelCommand(number);
         await sock.sendMessage(jid, { text: reply });
         continue;
       }
