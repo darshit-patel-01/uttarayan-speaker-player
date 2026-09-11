@@ -92,25 +92,80 @@ Open `http://localhost:8000` in a browser. Tabs:
 
 | Tab | Who | What |
 |---|---|---|
-| Enqueue Song | Everyone | Paste a YouTube URL to add it to the queue |
-| History | Everyone | Last 100 played songs with re-enqueue button |
-| Queue | Admin | Live queue with drag-to-reorder and per-song skip |
-| Manage Playlist | Admin | Create/edit fallback playlists |
+| Enqueue | Everyone | Search YouTube or paste a URL, add an optional dedication, see the current wait time |
+| History | Everyone | Play history (searchable, paginated) with one-click re-enqueue |
+| Dashboard | Admin | Songs played / playtime / top requesters, and the 50 most-requested songs (re-enqueueable) |
+| Queue | Admin | Live queue with drag-to-reorder, per-song skip, bump-to-front, multi-select skip, clear |
+| Playlist | Admin | Create/edit fallback playlists and choose the active one |
+| Blacklist | Admin | Block videos or requesters; one-click block from the recent-requesters list |
+| Messages | Admin | Appeals from blocked users, with replies delivered back over WhatsApp/Telegram |
+| Settings | Admin | Live tuning of limits, TTS, dedications, playlist mode, sharing — see [Admin settings](#admin-settings-live) |
 
-**Admin login** — click the lock icon, enter the username/password from `.env`.
-Admin users see playback controls (pause, seek, skip, volume), can reorder the
-queue, and their enqueue requests bypass all validation.
+Every song title in History, Dashboard and Playlist has an **Enqueue** button
+beside it. When dedications are enabled it first opens a small dialog for the
+requester's name and who the song is for; when they're off it enqueues
+straight away. Feedback everywhere is a kite-themed toast — a successful
+action shouts *Kai Po Che!*, a failure *E Lapet!*, and a kite gets cut in the
+background either way.
 
-### Now-playing banner (admin)
+**Admin login** — click the kite icon top-right and enter the username/password
+from `.env`. Admins get the playback controls (pause, seek, skip, volume), the
+admin tabs above, and their enqueue requests bypass every validation check
+except the video blacklist. The browser session is a token signed by the
+running server process, so **restarting the server logs every browser out** —
+the bridges are unaffected, they authenticate per request. Sessions otherwise
+last 12 hours.
 
-Always visible once a song is playing:
+### Now-playing banner
 
-- Live seek bar — click anywhere to jump
-- **−10s / +10s** — nudge playback position
-- **Pause / Resume**
-- **Skip** — jump to next song
-- **Volume slider**
-- **Up next** — shows the next queued song title
+Always visible once a song is playing, including during its TTS announcement:
+
+- Live seek bar — click anywhere to jump (admin)
+- **−10s / +10s** — nudge playback position (admin)
+- **Pause / Resume**, **Skip** (admin)
+- **Volume slider** (admin)
+- **Up next** — the next queued song, or the next fallback-playlist track
+- Dedication line ("💜 Dedicated by … for …") when the song has one
+
+## Sharing (QR code)
+
+The QR button top-right opens a share modal with three tabs — **WhatsApp**,
+**Telegram** and **Web** — each with a scannable code, the link it encodes,
+a copy button and scan instructions.
+
+- **WhatsApp / Telegram** point at whatever account the bridge is *actually*
+  signed in as. Each bridge reports its identity to the server on every
+  connect (`POST /share/bridge-identity`), so relinking WhatsApp to a
+  different phone or swapping the BotFather token corrects the QR by itself;
+  the modal marks these "✓ Auto-detected from the connected bridge". An admin
+  can still type a value by hand while a bridge is offline — the next bridge
+  connect overwrites it.
+- **Web** encodes the public Tailscale Funnel URL when one is serving the API
+  port (see [Public internet access](#public-internet-access)), otherwise the
+  address the page was loaded from. The modal says which it is.
+
+## Admin settings (live)
+
+The **Settings** tab overrides the `.env` defaults below without a restart —
+the API reads each value per request and the player per song, so a change
+takes effect on the next request / next song. **Reset all to defaults** clears
+every override.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Playlist mode | off | Reject all guest requests; only the active playlist plays |
+| Songs per user per window | 3 | Rate limit (admins exempt) |
+| Rate-limit window | 1 h | Window for the above |
+| Max queue wait | 2 h | Reject new songs once the queue's total wait exceeds this (0 = off) |
+| Max song length | 2 h | Reject longer songs |
+| Duplicate history check | 10 | Reject a song played within the last N songs (0 = off; admins exempt) |
+| Stuck song timeout | 120 s | Auto-skip if download + playback hasn't started by then |
+| Volume normalization | on | Even out loudness between songs |
+| Loudness target | −16 LUFS | Target for normalization |
+| Crossfade lead | 8 s | How early the next announcement starts before the current song ends |
+| Song dedications | on | Show the dedication fields and read dedications aloud; when off the UI hides them and any sent are dropped |
+| TTS language | Hindi | Hindi or English announcements |
+| Share public (Tailscale) link | on | Use the Funnel URL in the Web QR whenever the funnel is up |
 
 ## Adding songs via WhatsApp
 
@@ -132,6 +187,13 @@ npm start
 
 Scan the QR code in WhatsApp → Settings → Linked Devices → Link a Device.
 Session is saved to `auth_info_baileys/` — no rescan needed unless deleted.
+
+On every connect the bridge tells the server which phone number it's linked
+as, so the share QR's WhatsApp link always tracks the real account — there's
+no number to type in anywhere. This is an admin call, so it needs
+`ADMIN_USERNAME`/`ADMIN_PASSWORD` in the bridge's `.env`; without them the
+bridge still works, it just logs a warning and the QR keeps whatever an admin
+entered by hand.
 
 Once `npm install` has been run once, `python run.py` (or `start.bat` on
 Windows) starts the bridge automatically alongside everything else — no need
@@ -172,6 +234,11 @@ npm start
    token it gives you into `TELEGRAM_BOT_TOKEN`.
 2. Message [@userinfobot](https://t.me/userinfobot) to get your own numeric
    Telegram user ID for `ADMIN_TELEGRAM_IDS`.
+
+On start the bridge asks Telegram for its own `@username` and reports it to
+the server, so the share QR's Telegram link follows the token in use — swap
+bots and the QR updates on the next start. Needs `ADMIN_USERNAME`/
+`ADMIN_PASSWORD` in the bridge's `.env`, same as WhatsApp.
 
 Once `npm install` has been run and `TELEGRAM_BOT_TOKEN` is set,
 `python run.py` (or `start.bat` on Windows) starts the bridge automatically
@@ -231,19 +298,35 @@ curl -X POST http://localhost:8000/enqueue \
 
 ## Other endpoints
 
+Interactive docs at `http://localhost:8000/docs`. "Admin" means either a
+browser session token (`Authorization: Bearer …` from `/login`) or HTTP Basic
+with the admin credentials — the latter is what the bridges send.
+
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/now-playing` | — | Currently playing song + progress |
-| `GET` | `/queue` | Admin | Full queue list |
-| `GET` | `/wait-time` | — | Queue length + total estimated wait |
+| `POST` | `/login` | Basic | Check credentials, get a 12-hour session token |
+| `GET` | `/me` | Admin | Is this session still valid? 401 once the server has restarted |
+| `GET` | `/now-playing` | — | Currently playing song, progress, up next |
+| `GET` | `/wait-time` | — | Queue length, total estimated wait, whether dedications are on |
+| `GET` | `/search?q=` | — | YouTube search for the Enqueue tab |
+| `GET` | `/status/{song_id}` | — | Where a previously enqueued song is in the queue |
+| `GET` | `/my-songs` | — | The caller's own queued songs (identified by IP / phone / Telegram id) |
+| `POST` | `/cancel-last` | — | Cancel the caller's most recent queued song |
 | `GET` | `/history` | — | Play history (paginated, searchable) |
-| `POST` | `/skip` | Admin | Skip the currently playing song |
-| `POST` | `/skip/{song_id}` | Admin | Skip a specific queued song |
-| `POST` | `/pause` | Admin | Pause playback |
-| `POST` | `/resume` | Admin | Resume playback |
-| `POST` | `/seek` | Admin | Seek to position (seconds) |
-| `POST` | `/volume` | Admin | Set volume 0–100 |
+| `GET` | `/queue` | Admin | Full queue |
 | `PUT` | `/queue/reorder` | Admin | Reorder queued songs |
+| `POST` | `/bump/{song_id}` | Admin | Move a song to play next |
+| `POST` | `/skip` · `/skip/{song_id}` · `/queue/skip-multiple` · `/queue/clear` | Admin | Skip the current song / one / several / all |
+| `POST` | `/pause` · `/resume` · `/stop` · `/seek` | Admin | Playback control |
+| `GET` `POST` | `/volume` | Admin | Read / set volume 0–100 |
+| `GET` | `/playback-status` | Admin | Paused / stopped flags |
+| `GET` | `/stats` | Admin | Dashboard numbers |
+| `GET` `PUT` | `/config` · `POST /config/reset` | Admin | Live settings behind the Settings tab |
+| `GET` | `/share/config` | — | Share-link config plus the resolved public/local web URL |
+| `POST` | `/share/config` | Admin | Set the WhatsApp number / Telegram bot by hand |
+| `POST` | `/share/bridge-identity` | Admin | Bridges report the account they're signed in as |
+| `GET` | `/share/qr?target=` | — | SVG QR code for `whatsapp`, `telegram` or `web` |
+| — | `/playlists…` · `/blacklist…` · `/messages…` | Admin* | Playlists, blacklist and appeals — see `/docs`. *`/messages/appeal` and `/messages/outbox…` are open: they're how blocked users and the bridges reach the admin |
 | `GET` | `/health` | — | Health check |
 
 ## Validation
@@ -315,8 +398,6 @@ it.
 
 ## TTS announcements
 
-## TTS announcements
-
 Before each queued song, the consumer speaks:
 > _"अगला गाना है… [song title]!"_
 
@@ -350,7 +431,7 @@ back to a plain `GET /now-playing` fetch on load and auto-reconnects
 
 ## Volume normalization
 
-Every song is played through ffplay's `loudnorm` filter (EBU R128, single-pass)
+Every song is played through mpv's `loudnorm` filter (EBU R128, single-pass)
 so tracks recorded at very different volumes land at a consistent perceived
 loudness, instead of some songs being much louder/quieter than others.
 Single-pass trades a few seconds of ramp-up accuracy per song for zero added
@@ -401,22 +482,46 @@ multiple playlists and switch the active one at any time.
 See [TAILSCALE.md](TAILSCALE.md) — exposes the app over HTTPS via Tailscale
 Funnel with no router config or TLS setup required.
 
+The server detects the Funnel itself (`tailscale serve status --json`, cached
+for 30 s). While a funnel is proxying to the API port, the share modal's
+**Web** QR and link switch to the public `https://<device>.<tailnet>.ts.net`
+address, and fall back to the local address when the funnel is off. Turn this
+off with the **Share public (Tailscale) link** setting if you'd rather always
+hand out the LAN address. Hosts served on the tailnet *without* Funnel are
+ignored — they're no more reachable to a guest than localhost.
+
 Current public URL (while Funnel is active): `https://darshitwindos.tailb36c4a.ts.net`
 
 ## Configuration (`.env`)
+
+Everything in the [Admin settings](#admin-settings-live) table can be
+overridden live from the Settings tab; the values here are the defaults it
+falls back to.
 
 | Variable | Default | Description |
 |---|---|---|
 | `ADMIN_USERNAME` | `admin` | Admin login username |
 | `ADMIN_PASSWORD` | *(required)* | Admin login password — must be set |
-| `MAX_DURATION_SECONDS` | `7200` (2 h) | Songs longer than this are rejected |
-| `RATE_LIMIT_MAX_SONGS` | `3` | Max songs per requester per window |
+| `API_PORT` | `8000` | Port the API and web UI listen on. Change it if something else already owns 8000 (Splunk's web UI defaults to it, for one) |
+| `RATE_LIMIT_MAX_SONGS` | `3` | Max songs per requester per window (admins exempt) |
 | `RATE_LIMIT_WINDOW_SECONDS` | `3600` (1 h) | Rate limit window length |
-| `NORMALIZE_VOLUME` | `true` | Apply ffplay's `loudnorm` filter to every song |
+| `MAX_QUEUE_WAIT_SECONDS` | `7200` (2 h) | Reject new songs once the queue's total wait exceeds this; `0` disables |
+| `MAX_DURATION_SECONDS` | `7200` (2 h) | Songs longer than this are rejected |
+| `DUPLICATE_HISTORY_COUNT` | `10` | Reject a song played within the last N songs; `0` disables |
+| `STUCK_TIMEOUT_SECONDS` | `120` | Auto-skip a song whose download + playback hasn't started in time |
+| `PLAYLIST_MODE` | `false` | Reject all guest requests; only the active playlist plays |
+| `DEDICATIONS_ENABLED` | `true` | Let requesters attach a dedication, announced via TTS |
+| `TTS_LANGUAGE` | `hi` | `hi` (Hindi) or `en` (English) announcements |
+| `NORMALIZE_VOLUME` | `true` | Apply mpv's `loudnorm` filter to every song |
 | `LOUDNORM_TARGET_LUFS` | `-16` | Target loudness (LUFS) for normalization |
 | `CROSSFADE_LEAD_SECONDS` | `8` | How early into a song's tail the next announcement starts |
-| `QUEUE_STATE_FILE` | `.queue_state.json` | Shared queue state file path |
-| `HISTORY_FILE` | `.history.json` | Play history file path |
+| `USE_PUBLIC_URL` | `true` | Put the Tailscale Funnel URL in the Web share QR whenever the funnel is up |
+| `DB_FILE` | `uttarayan.db` | Path of the SQLite database everything lives in |
+| `ANALYTICS_MAX_EVENTS` | `5000` | Cap on stored analytics events |
+
+The legacy `*_FILE` variables (`QUEUE_STATE_FILE`, `HISTORY_FILE`, …) only
+point at old JSON files for the one-time import into SQLite — you can ignore
+them.
 
 ## Notes
 
