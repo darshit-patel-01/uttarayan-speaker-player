@@ -1,13 +1,11 @@
 fastapi
 uvicorn[standard]
 PyJWT
-confluent-kafka
 yt-dlp
 bgutil-ytdlp-pot-provider
 pydantic
 python-dotenv
 edge-tts
-redis
 segno
 pytest
 pytest-sugar

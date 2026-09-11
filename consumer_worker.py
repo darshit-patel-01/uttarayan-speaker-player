@@ -8,12 +8,14 @@ import tempfile
 import threading
 import time
 
-from confluent_kafka import Consumer, KafkaError
-
 from config import settings
 import default_playlist
 from playback import download_audio, is_stopped, kill_active_player, play_youtube_audio
 import queue_state
+
+# How often the idle loop re-checks the queue table for new songs. Enqueue
+# latency is bounded by this; 200 ms matches the old Kafka poll timeout.
+POLL_INTERVAL_SECONDS = 0.2
 
 # ---------------------------------------------------------------------------
 # Pre-fetch cache: download the next song in the background while the
@@ -215,18 +217,7 @@ def main():
     signal.signal(signal.SIGINT, _handle_shutdown)
     signal.signal(signal.SIGTERM, _handle_shutdown)
 
-    consumer = Consumer(
-        {
-            "bootstrap.servers": settings.kafka_bootstrap_servers,
-            "group.id": settings.kafka_group_id,
-            "auto.offset.reset": "earliest",
-            "enable.auto.commit": False,
-            "max.poll.interval.ms": settings.kafka_max_poll_interval_ms,
-        }
-    )
-    consumer.subscribe([settings.kafka_topic])
-
-    logger.info("Consumer started. Listening on topic '%s'...", settings.kafka_topic)
+    logger.info("Player started. Polling the queue for songs...")
 
     # Reset any items left as 'playing' from a previous crashed/killed run.
     # Without this, get_next_queued() skips them (only looks for 'queued'),
@@ -241,38 +232,19 @@ def main():
             if _shutdown:
                 break
 
-            # ---------------------------------------------------------------------------
-            # Phase 1: drain one Kafka message (non-blocking).
-            #
-            # Kafka is used only for reliable delivery of new song requests; the URL
-            # and ordering live in queue_state.json (written by the API before Kafka
-            # produce).  We commit each message as soon as it arrives so Kafka doesn't
-            # re-deliver it on restart.  queue_state.json is the authoritative queue
-            # (file-persisted, survives restarts) and the source of play order.
-            # ---------------------------------------------------------------------------
-            msg = consumer.poll(timeout=0.2)
-            if msg is not None:
-                if msg.error():
-                    if msg.error().code() != KafkaError._PARTITION_EOF:
-                        logger.error("Kafka error: %s", msg.error())
-                else:
-                    try:
-                        consumer.commit(message=msg)
-                    except Exception:
-                        logger.exception("Failed to commit Kafka message")
-
-            # ---------------------------------------------------------------------------
-            # Phase 2: find the next song queue_state wants us to play.
-            #
-            # get_next_queued() returns songs in the order stored in queue_state.json,
-            # which the user may have reordered via drag-and-drop.  This is what makes
-            # drag reordering actually affect play order.
-            # ---------------------------------------------------------------------------
+            # The queue table is the single source of truth and the API writes to
+            # it directly, so finding work is just asking for the next queued row.
+            # get_next_queued() returns songs in stored order, which the admin may
+            # have changed via drag-and-drop — that is what makes reordering
+            # actually affect play order.
             next_item = queue_state.get_next_queued()
             if next_item is None:
                 if not queue_state.has_pending_songs():
                     _play_default_song()
-                # else: a song is playing right now (status="playing"); keep looping
+                # Nothing to do right now (idle, or a playlist song just
+                # finished / there was none) — pace the poll so an empty queue
+                # doesn't spin the CPU.
+                time.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
             song_id = next_item["id"]
@@ -336,8 +308,7 @@ def main():
             _wait_while_stopped()
 
     finally:
-        consumer.close()
-        logger.info("Consumer stopped.")
+        logger.info("Player stopped.")
 
 
 if __name__ == "__main__":

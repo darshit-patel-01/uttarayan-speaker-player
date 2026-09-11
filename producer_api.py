@@ -9,7 +9,6 @@ import time
 from typing import List, Optional
 
 import jwt
-from confluent_kafka import Producer
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
@@ -40,15 +39,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("producer_api")
 
 app = FastAPI(title="YouTube Audio Queue")
-
-_producer: Optional[Producer] = None
-
-
-def get_producer() -> Producer:
-    global _producer
-    if _producer is None:
-        _producer = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
-    return _producer
 
 
 # Browser sessions use a JWT signed with this secret. It is generated fresh
@@ -988,9 +978,9 @@ def status(song_id: str):
 def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depends(optional_admin)):
     """
     Accepts one or more YouTube URLs. Each is run through
-    real_time_validation.validate_song_request() and only pushed onto the
-    Kafka queue if it passes: not already queued, within the requester's
-    rate limit, not age-restricted, actually a music video, and under the
+    real_time_validation.validate_song_request() and only added to the
+    queue if it passes: not already queued, within the requester's rate
+    limit, not age-restricted, actually a music video, and under the
     duration limit.
 
     URLs that fail validation are skipped and reported back in "rejected"
@@ -1001,10 +991,8 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
     Requests authenticated as admin skip all of the above checks (metadata
     is still probed, so queue/wait-time accounting is unaffected).
     """
-    producer = get_producer()
     enqueued = []
     rejected = []
-    delivery_failures = []  # keyed by song_id
     is_admin = admin is not None
     source = detect_source(request)
     requester_id = detect_requester_id(request, source)
@@ -1024,10 +1012,6 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
                     detail="Dedication contains inappropriate language. Please rephrase.",
                 )
 
-    def _on_delivery(err, msg, song_id, url):
-        if err is not None:
-            delivery_failures.append({"id": song_id, "url": url, "reason": f"Kafka delivery failed: {err}"})
-
     for url in req.urls:
         result = validate_song_request(url, requester_id=requester_id, is_admin=is_admin)
         if not result.is_valid:
@@ -1038,55 +1022,30 @@ def enqueue(req: EnqueueRequest, request: Request, admin: Optional[str] = Depend
         title = result.metadata.get("title")
         uploader = result.metadata.get("uploader")
 
+        # add_song's INSERT is the whole hand-off: the player loop polls the
+        # same table for the next queued row.
         song_id, position, wait_seconds = queue_state.add_song(
             url, duration, title, uploader, result.video_id,
             source=source, requester_id=requester_id,
             dedication=dedication,
             dedication_name=dedication_name,
         )
-
-        try:
-            producer.produce(
-                settings.kafka_topic,
-                value=json.dumps({"id": song_id, "url": url}).encode("utf-8"),
-                callback=lambda err, msg, song_id=song_id, url=url: _on_delivery(err, msg, song_id, url),
-            )
-            producer.poll(0)
-            enqueued.append(
-                {
-                    "id": song_id,
-                    "url": url,
-                    "title": title,
-                    "uploader": uploader,
-                    "source": source,
-                    "dedication": dedication,
-                    "dedication_name": dedication_name,
-                    "position_in_queue": position,
-                    "duration_seconds": duration,
-                    "duration": queue_state.format_duration(duration),
-                    "estimated_wait_seconds": round(wait_seconds),
-                    "estimated_wait": queue_state.format_duration(wait_seconds),
-                }
-            )
-        except Exception as exc:
-            logger.exception("Failed to enqueue %s", url)
-            queue_state.mark_done(song_id)
-            rejected.append({"url": url, "reason": f"Kafka error: {exc}"})
-
-    try:
-        producer.flush(10)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Kafka flush error: {exc}") from exc
-
-    # Anything that failed delivery during flush should move from enqueued to
-    # rejected, and be removed from the shared queue state since it never
-    # actually made it onto the Kafka queue.
-    if delivery_failures:
-        failed_ids = {d["id"] for d in delivery_failures}
-        enqueued = [item for item in enqueued if item["id"] not in failed_ids]
-        for failure in delivery_failures:
-            queue_state.mark_done(failure["id"])
-            rejected.append({"url": failure["url"], "reason": failure["reason"]})
+        enqueued.append(
+            {
+                "id": song_id,
+                "url": url,
+                "title": title,
+                "uploader": uploader,
+                "source": source,
+                "dedication": dedication,
+                "dedication_name": dedication_name,
+                "position_in_queue": position,
+                "duration_seconds": duration,
+                "duration": queue_state.format_duration(duration),
+                "estimated_wait_seconds": round(wait_seconds),
+                "estimated_wait": queue_state.format_duration(wait_seconds),
+            }
+        )
 
     logger.info("Enqueued %d url(s), rejected %d", len(enqueued), len(rejected))
     return {"enqueued": enqueued, "rejected": rejected}

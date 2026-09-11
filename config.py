@@ -8,22 +8,6 @@ load_dotenv()
 
 @dataclass
 class Settings:
-    kafka_bootstrap_servers: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:9092")
-    kafka_topic: str = os.getenv("KAFKA_TOPIC", "youtube-audio-queue")
-    kafka_group_id: str = os.getenv("KAFKA_GROUP_ID", "youtube-audio-player")
-
-    # The consumer blocks for the entire length of a song between calls to
-    # consumer.poll(), since play_youtube_audio() is synchronous. Kafka's
-    # default max.poll.interval.ms (5 minutes) would otherwise evict the
-    # consumer from its group mid-song and redeliver the same message.
-    # 6 hours comfortably covers even very long tracks/mixes.
-    kafka_max_poll_interval_ms: int = int(os.getenv("KAFKA_MAX_POLL_INTERVAL_MS", str(6 * 60 * 60 * 1000)))
-
-    # Redis backs real_time_validation/'s per-requester rate limiting.
-    redis_host: str = os.getenv("REDIS_HOST", "127.0.0.1")
-    redis_port: int = int(os.getenv("REDIS_PORT", "6380"))
-    redis_db: int = int(os.getenv("REDIS_DB", "0"))
-
     # Max songs a single requester (phone number, Telegram id, or IP for web)
     # may successfully enqueue within rate_limit_window_seconds. Admins are
     # exempt, same as the other validation checks below.
@@ -129,7 +113,7 @@ class Settings:
     admin_password: str = os.getenv("ADMIN_PASSWORD", "")
 
     # Admin-managed fallback playlist: loops automatically whenever the real
-    # (Kafka-backed) queue is empty. See default_playlist.py.
+    # request queue is empty. See default_playlist.py.
     default_playlist_file: str = os.getenv(
         "DEFAULT_PLAYLIST_FILE",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), ".default_playlist.json"),

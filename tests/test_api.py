@@ -1,6 +1,6 @@
 """Integration tests for the FastAPI enqueue-to-queue flow."""
 import base64
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,15 +30,7 @@ class _FakeValidationResult:
 
 @pytest.fixture(autouse=True)
 def _mock_externals():
-    mock_producer = MagicMock()
-    mock_producer.produce = MagicMock()
-    mock_producer.poll = MagicMock()
-    mock_producer.flush = MagicMock()
-
-    with (
-        patch("producer_api.get_producer", return_value=mock_producer),
-        patch("producer_api.validate_song_request", return_value=_FakeValidationResult()),
-    ):
+    with patch("producer_api.validate_song_request", return_value=_FakeValidationResult()):
         yield
 
 
