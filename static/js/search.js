@@ -104,6 +104,10 @@ async function enqueueFromSearch(song, btn) {
       const s = data.enqueued[0];
       btn.textContent = `#${s.position_in_queue}`;
       btn.style.background = '#2e7d32';
+      showToast(
+        `${s.title || song.title || 'Song'} queued! Position #${s.position_in_queue}, wait ${s.estimated_wait}`,
+        'success', 4000
+      );
 
       document.getElementById('dedication-name').value = '';
       document.getElementById('dedication').value = '';
