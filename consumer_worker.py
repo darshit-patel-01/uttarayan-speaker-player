@@ -72,19 +72,32 @@ logger = logging.getLogger("consumer_worker")
 # Voice: hi-IN-SwaraNeural (warm female Hindi voice).
 # rate="+25%" and pitch="+8Hz" give it an upbeat, energetic feel.
 # ---------------------------------------------------------------------------
-def _tts_announce(title: str, dedication: str = None, dedication_name: str = None) -> None:
+def _tts_announce(title: str, dedication: str = None, dedication_name: str = None, from_playlist: bool = False) -> None:
     import asyncio
     import edge_tts
     import runtime_config
 
     async def _generate(path: str) -> None:
-        if runtime_config.get("dedications_enabled") and dedication_name and dedication:
-            tts_text = f"यह गाना {dedication_name} की तरफ से {dedication} के लिए है… {title}!"
+        lang = runtime_config.get("tts_language") or "hi"
+        if lang == "en":
+            voice = "en-IN-NeerjaNeural"
+            if runtime_config.get("dedications_enabled") and dedication_name and dedication:
+                tts_text = f"This song is from {dedication_name} for {dedication}… {title}!"
+            elif from_playlist:
+                tts_text = f"Playing from the default playlist… {title}!"
+            else:
+                tts_text = f"Next up… {title}!"
         else:
-            tts_text = f"अगला गाना है… {title}!"
+            voice = "hi-IN-SwaraNeural"
+            if runtime_config.get("dedications_enabled") and dedication_name and dedication:
+                tts_text = f"यह गाना {dedication_name} की तरफ से {dedication} के लिए है… {title}!"
+            elif from_playlist:
+                tts_text = f"डिफ़ॉल्ट प्लेलिस्ट से बज रहा है… {title}!"
+            else:
+                tts_text = f"अगला गाना है… {title}!"
         communicate = edge_tts.Communicate(
             text=tts_text,
-            voice="hi-IN-SwaraNeural",
+            voice=voice,
             rate="-10%",
             pitch="+8Hz",
         )
@@ -179,6 +192,7 @@ def _play_default_song():
 
     logger.info("Queue empty, playing default playlist song: %s", song.get("title") or song["url"])
     default_playlist.set_now_playing(song)
+    _tts_announce(song.get("title") or "the next song", from_playlist=True)
     try:
         finished = play_youtube_audio(
             song["url"],

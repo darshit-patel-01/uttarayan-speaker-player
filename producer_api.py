@@ -1,13 +1,16 @@
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import re
 import secrets
+import time
 from typing import List, Optional
 
+import jwt
 from confluent_kafka import Producer
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
@@ -15,6 +18,7 @@ import analytics
 from config import settings
 import default_playlist
 import messages
+import public_url
 import runtime_config
 from playback import (
     get_download_progress, get_volume, set_volume,
@@ -47,32 +51,91 @@ def get_producer() -> Producer:
     return _producer
 
 
-security = HTTPBasic()
-optional_security = HTTPBasic(auto_error=False)
+# Browser sessions use a JWT signed with this secret. It is generated fresh
+# every time the process starts, so restarting the server invalidates every
+# token it had handed out and the web UI drops back to the login form instead
+# of falsely showing an admin as still signed in. The bridges authenticate
+# with HTTP Basic instead, so they keep working across restarts.
+_SESSION_SECRET = secrets.token_urlsafe(32)
+_JWT_ALGORITHM = "HS256"
+SESSION_TTL_SECONDS = 12 * 60 * 60
 
 
-def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
-    valid_username = secrets.compare_digest(credentials.username, settings.admin_username)
-    valid_password = secrets.compare_digest(credentials.password, settings.admin_password)
-    if not (valid_username and valid_password):
-        raise HTTPException(status_code=401, detail="Invalid admin credentials")
-    return credentials.username
+def issue_session_token(username: str) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": username, "iat": now, "exp": now + SESSION_TTL_SECONDS},
+        _SESSION_SECRET,
+        algorithm=_JWT_ALGORITHM,
+    )
 
 
-def optional_admin(credentials: Optional[HTTPBasicCredentials] = Depends(optional_security)) -> Optional[str]:
+def _username_from_session_token(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, _SESSION_SECRET, algorithms=[_JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    return payload.get("sub")
+
+
+def _username_from_basic(encoded: str) -> Optional[str]:
+    try:
+        raw = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return None
+    username, _, password = raw.partition(":")
+    valid_username = secrets.compare_digest(username, settings.admin_username)
+    valid_password = secrets.compare_digest(password, settings.admin_password)
+    return username if (valid_username and valid_password) else None
+
+
+def _authenticate(request: Request) -> Optional[str]:
+    """
+    Resolves the caller's admin identity from the Authorization header.
+
+    Accepts a Bearer session JWT (the web UI) or HTTP Basic credentials (the
+    WhatsApp/Telegram bridges and the test suite). Returns None when no
+    Authorization header was sent, and raises 401 when one was sent but
+    didn't check out.
+    """
+    header = request.headers.get("Authorization")
+    if not header:
+        return None
+
+    scheme, _, value = header.partition(" ")
+    scheme = scheme.lower()
+    value = value.strip()
+
+    if scheme == "bearer":
+        username = _username_from_session_token(value)
+        if username is None:
+            raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+        return username
+
+    if scheme == "basic":
+        username = _username_from_basic(value)
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid admin credentials")
+        return username
+
+    raise HTTPException(status_code=401, detail="Unsupported authorization scheme")
+
+
+def require_admin(request: Request) -> str:
+    username = _authenticate(request)
+    if username is None:
+        raise HTTPException(status_code=401, detail="Admin credentials required")
+    return username
+
+
+def optional_admin(request: Request) -> Optional[str]:
     """
     Like require_admin, but for endpoints that are open to everyone: returns
     the username if valid admin credentials were sent, None if none were
     sent, and 401s only if credentials were sent but are wrong (so a typo'd
     admin login doesn't silently fall back to being treated as a stranger).
     """
-    if credentials is None:
-        return None
-    valid_username = secrets.compare_digest(credentials.username, settings.admin_username)
-    valid_password = secrets.compare_digest(credentials.password, settings.admin_password)
-    if not (valid_username and valid_password):
-        raise HTTPException(status_code=401, detail="Invalid admin credentials")
-    return credentials.username
+    return _authenticate(request)
 
 
 MAX_DEDICATION_LENGTH = 100
@@ -111,6 +174,30 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/my-songs")
+def my_songs(requester_id: str):
+    """Public — returns songs in the queue belonging to a specific requester."""
+    all_songs = queue_state.list_queue()
+    mine = [s for s in all_songs if s.get("requester_id") == requester_id]
+    for s in mine:
+        s["duration"] = queue_state.format_duration(s["duration_seconds"])
+        s["estimated_wait"] = queue_state.format_duration(s["estimated_wait_seconds"])
+    return {"songs": mine}
+
+
+@app.post("/cancel-last")
+def cancel_last(requester_id: str):
+    """Public — cancels the requester's most recently queued song (if still queued)."""
+    all_songs = queue_state.list_queue()
+    mine = [s for s in all_songs if s.get("requester_id") == requester_id and s["status"] == "queued"]
+    if not mine:
+        return {"cancelled": False, "reason": "You have no songs waiting in the queue."}
+    last = mine[-1]
+    queue_state.mark_skip_requested(last["id"])
+    logger.info("Requester %s cancelled song %s (%s)", requester_id, last["id"], last.get("title"))
+    return {"cancelled": True, "title": last.get("title") or last.get("url")}
+
+
 @app.get("/history")
 def history(page: int = 1, per_page: int = 10, q: str = ""):
     """
@@ -147,6 +234,7 @@ def wait_time():
         "queue_length": queue_length,
         "estimated_wait_seconds": round(estimated_wait_seconds),
         "estimated_wait": queue_state.format_duration(estimated_wait_seconds),
+        "dedications_enabled": bool(runtime_config.get("dedications_enabled")),
     }
 
 
@@ -350,7 +438,22 @@ async def ws_now_playing(websocket: WebSocket) -> None:
 
 @app.post("/login")
 def login(admin: str = Depends(require_admin)):
-    """Validates admin credentials. Returns 401 (via require_admin) if they're wrong."""
+    """
+    Validates admin credentials and mints a browser session token. Returns 401
+    (via require_admin) if they're wrong. The token is signed with a per-process
+    secret, so it stops working as soon as the server restarts.
+    """
+    return {
+        "status": "ok",
+        "username": admin,
+        "token": issue_session_token(admin),
+        "expires_in": SESSION_TTL_SECONDS,
+    }
+
+
+@app.get("/me")
+def me(admin: str = Depends(require_admin)):
+    """Confirms a stored session token is still valid; 401 once it isn't."""
     return {"status": "ok", "username": admin}
 
 
@@ -1066,13 +1169,34 @@ def _get_share_config() -> dict:
     return {}
 
 
+def _web_share_url(request: Request) -> str:
+    """
+    The address to hand out for the web queue: the public Tailscale Funnel URL
+    when the setting is on and the funnel is actually up, otherwise whatever
+    host this request came in on. A localhost URL in a QR code is useless to
+    anyone else, so preferring the public one when it exists is the point.
+    """
+    if runtime_config.get("use_public_url"):
+        public = public_url.get_public_url(settings.api_port)
+        if public:
+            return public
+    return str(request.base_url).rstrip("/")
+
+
 @app.get("/share/config")
-def share_config_get():
-    return _get_share_config()
+def share_config_get(request: Request):
+    cfg = _get_share_config()
+    public = public_url.get_public_url(settings.api_port)
+    return {
+        **cfg,
+        "web_url": _web_share_url(request),
+        "public_url": public,
+        "public_url_enabled": bool(runtime_config.get("use_public_url")),
+    }
 
 
 @app.post("/share/config")
-def share_config_set(req: ShareConfigRequest, admin: str = Depends(require_admin)):
+def share_config_set(req: ShareConfigRequest, request: Request, admin: str = Depends(require_admin)):
     cfg = {"whatsapp_number": req.whatsapp_number, "telegram_bot": req.telegram_bot}
     import db as db_mod
     conn = db_mod.get_conn()
@@ -1080,7 +1204,75 @@ def share_config_set(req: ShareConfigRequest, admin: str = Depends(require_admin
         "INSERT OR REPLACE INTO app_state (key, value) VALUES ('share_config', ?)",
         (json.dumps(cfg),),
     )
-    return cfg
+    return {
+        **cfg,
+        "web_url": _web_share_url(request),
+        "public_url": public_url.get_public_url(settings.api_port),
+        "public_url_enabled": bool(runtime_config.get("use_public_url")),
+    }
+
+
+class BridgeIdentityRequest(BaseModel):
+    whatsapp_number: Optional[str] = None
+    telegram_bot: Optional[str] = None
+
+    @field_validator("whatsapp_number")
+    @classmethod
+    def clean_number(cls, v):
+        if v is None:
+            return None
+        digits = re.sub(r"\D", "", v)
+        if not digits:
+            raise ValueError("whatsapp_number must contain digits")
+        return digits
+
+    @field_validator("telegram_bot")
+    @classmethod
+    def clean_bot(cls, v):
+        if v is None:
+            return None
+        handle = v.strip().lstrip("@")
+        if not handle:
+            raise ValueError("telegram_bot must not be blank")
+        return handle
+
+
+@app.post("/share/bridge-identity")
+def share_bridge_identity(req: BridgeIdentityRequest, admin: str = Depends(require_admin)):
+    """
+    Lets a bridge report the account it is actually signed in as — the phone
+    WhatsApp is linked to, or the Telegram bot's @username — so the share QR
+    points at the right place without an admin retyping it, and without it
+    silently going stale after a relink or a new BotFather token.
+    """
+    updates = {}
+    if req.whatsapp_number is not None:
+        updates["whatsapp_number"] = req.whatsapp_number
+    if req.telegram_bot is not None:
+        updates["telegram_bot"] = req.telegram_bot
+    if not updates:
+        raise HTTPException(status_code=422, detail="Provide whatsapp_number or telegram_bot")
+
+    cfg = _get_share_config()
+    changed = False
+    for key, value in updates.items():
+        flag = f"{key.split('_')[0]}_auto_detected"
+        if cfg.get(key) != value or cfg.get(flag) is not True:
+            cfg[key] = value
+            cfg[flag] = True
+            changed = True
+            logger.info("Bridge registered its identity: %s=%s", key, value)
+
+    if not changed:
+        return {"status": "unchanged", **updates}
+
+    import db as db_mod
+    conn = db_mod.get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO app_state (key, value) VALUES ('share_config', ?)",
+        (json.dumps(cfg),),
+    )
+    return {"status": "updated", **updates}
 
 
 @app.get("/share/qr")
@@ -1100,7 +1292,7 @@ def share_qr(request: Request, target: str = "web"):
             raise HTTPException(status_code=404, detail="Telegram bot not configured")
         url = f"https://t.me/{bot}"
     else:
-        url = str(request.base_url).rstrip("/")
+        url = _web_share_url(request)
     qr = segno.make(url)
     buf = io.BytesIO()
     qr.save(buf, kind="svg", scale=8, dark="#ff6d00", border=2)

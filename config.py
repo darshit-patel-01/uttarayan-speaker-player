@@ -62,6 +62,12 @@ class Settings:
     # of playing into dead silence first. See consumer_worker._announce_upcoming.
     crossfade_lead_seconds: float = float(os.getenv("CROSSFADE_LEAD_SECONDS", "8"))
     dedications_enabled: bool = os.getenv("DEDICATIONS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    tts_language: str = os.getenv("TTS_LANGUAGE", "hi")
+    stuck_timeout_seconds: int = int(os.getenv("STUCK_TIMEOUT_SECONDS", "120"))
+    playlist_mode: bool = os.getenv("PLAYLIST_MODE", "false").lower() in ("1", "true", "yes", "on")
+    duplicate_history_count: int = int(os.getenv("DUPLICATE_HISTORY_COUNT", "10"))
+    api_port: int = int(os.getenv("API_PORT", "8000"))
+    use_public_url: bool = os.getenv("USE_PUBLIC_URL", "true").lower() in ("1", "true", "yes", "on")
 
     # Simple file-based signal: the API touches this file to request a skip,
     # and the consumer (polling while ffplay runs) deletes it once handled.

@@ -53,6 +53,37 @@ const pendingNotifications = new Map();
 // Blocked-user appeal: chatId -> { senderId, expiresAt }
 const pendingAppeals = new Map();
 
+// Welcome message sent on first interaction from a user
+const WELCOME_MESSAGE = `🎵 *Welcome to the Song Queue!*
+
+Here's how to request songs:
+
+🔍 *Search for a song:*
+   /search Tara Vina Shyam
+
+▶️ *Play from search results:*
+   /play 1
+   /play 2 from Darsh for Mom
+
+🔗 *Play a YouTube link directly:*
+   play https://youtu.be/abc123
+   play https://youtu.be/abc123 from Darsh for Mom
+
+📊 *Other commands:*
+   /status — what's playing & queue info
+   /next — what's coming up next
+   /history — last 5 songs played
+   /my songs — your songs in the queue
+   /cancel — cancel your last queued song
+   /help — show this message again
+
+💡 *Tips:*
+• "from Name" adds your name to the request
+• "for Person" dedicates the song to someone
+• You'll get notified when your song starts playing!`;
+
+const greeted = new Set(); // chatId — tracks who already got the welcome
+
 // Song search: "/search <query>" or "search <query>" returns numbered results
 const SEARCH_COMMAND_RE = /^\s*\/?search\s+(.+)/i;
 const PLAY_NUMBER_RE = /^\s*\/?play\s+(\d+)(?:\s+from\s+(.+?))?(?:\s+for\s+(.+?))?$/i;
@@ -108,6 +139,74 @@ async function handleStatusCommand() {
     return lines.join("\n");
   } catch (err) {
     return `Couldn't reach the queue: ${err.message}`;
+  }
+}
+
+async function handleHistoryCommand() {
+  try {
+    const res = await fetch(`${BASE_URL}/history?per_page=5`);
+    const data = await res.json();
+    const songs = data.songs || [];
+    if (songs.length === 0) return "📜 No songs have been played yet.";
+    const lines = ["📜 *Recently played:*\n"];
+    songs.forEach((s, i) => {
+      const dur = s.duration_fmt || "";
+      lines.push(`${i + 1}. ${s.title || s.url}${dur ? ` (${dur})` : ""}`);
+    });
+    return lines.join("\n");
+  } catch (err) {
+    return `Couldn't fetch history: ${err.message}`;
+  }
+}
+
+async function handleNextCommand() {
+  try {
+    const res = await fetch(`${BASE_URL}/now-playing`);
+    const data = await res.json();
+    const lines = [];
+    if (data.playing) {
+      lines.push(`🎵 *Now playing:* ${data.playing.title || data.playing.url}`);
+    } else {
+      lines.push("🔇 Nothing playing right now.");
+    }
+    if (data.next) {
+      lines.push(`⏭ *Up next:* ${data.next.title || data.next.url}`);
+    } else {
+      lines.push("📭 Nothing queued next.");
+    }
+    return lines.join("\n");
+  } catch (err) {
+    return `Couldn't fetch queue: ${err.message}`;
+  }
+}
+
+async function handleMySongsCommand(requesterId) {
+  try {
+    const res = await fetch(`${BASE_URL}/my-songs?requester_id=${encodeURIComponent(requesterId)}`);
+    const data = await res.json();
+    const songs = data.songs || [];
+    if (songs.length === 0) return "🎶 You have no songs in the queue right now.";
+    const lines = ["🎶 *Your songs in queue:*\n"];
+    songs.forEach((s) => {
+      const status = s.status === "playing" ? "▶️ Playing now" : `#${s.position_in_queue} — ~${s.estimated_wait} wait`;
+      lines.push(`• ${s.title || s.url}\n   ${status}`);
+    });
+    return lines.join("\n");
+  } catch (err) {
+    return `Couldn't fetch your songs: ${err.message}`;
+  }
+}
+
+async function handleCancelCommand(requesterId) {
+  try {
+    const res = await fetch(`${BASE_URL}/cancel-last?requester_id=${encodeURIComponent(requesterId)}`, { method: "POST" });
+    const data = await res.json();
+    if (data.cancelled) {
+      return `🗑️ Cancelled: ${data.title}`;
+    }
+    return `❌ ${data.reason}`;
+  } catch (err) {
+    return `Couldn't cancel: ${err.message}`;
   }
 }
 
@@ -185,8 +284,36 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 bot.on("polling_error", (err) => console.error("Polling error:", err.message));
 
+// Tell the API which bot we're actually signed in as, so the share QR/t.me
+// link tracks this token instead of a handle hand-copied into the settings
+// that goes stale after a new BotFather token.
+async function registerOwnUsername(username) {
+  if (!username) return;
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
+    console.warn("ADMIN_USERNAME/ADMIN_PASSWORD not set — cannot auto-register the share link bot.");
+    return;
+  }
+  const token = Buffer.from(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`).toString("base64");
+  try {
+    const res = await fetch(`${BASE_URL}/share/bridge-identity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Basic ${token}` },
+      body: JSON.stringify({ telegram_bot: username }),
+    });
+    if (!res.ok) {
+      console.warn(`Share-link registration failed: HTTP ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    console.log(`Share link ${data.status === "updated" ? "updated to" : "already set to"} @${username}`);
+  } catch (err) {
+    console.warn(`Share-link registration failed: ${err.message}`);
+  }
+}
+
 bot.getMe().then((me) => {
   console.log(`Telegram bridge connected as @${me.username}. Forwarding YouTube links to ${ENQUEUE_URL}`);
+  registerOwnUsername(me.username);
 });
 
 // Poll every 10s for admin replies to deliver to blocked users
@@ -256,9 +383,51 @@ bot.on("message", async (msg) => {
   // Expired appeal — clean up
   if (appeal) pendingAppeals.delete(chatId);
 
+  // Send welcome message on first interaction
+  if (!greeted.has(chatId)) {
+    greeted.add(chatId);
+    await bot.sendMessage(chatId, WELCOME_MESSAGE, { parse_mode: "Markdown" });
+  }
+
+  // Help command: "/help", "/menu", "/welcome"
+  if (/^\s*\/?(help|menu|welcome)\s*$/i.test(text)) {
+    await bot.sendMessage(chatId, WELCOME_MESSAGE, { parse_mode: "Markdown" });
+    return;
+  }
+
   // Status commands: "status", "queue", "wait" (with or without leading "/")
   if (STATUS_COMMAND_RE.test(text)) {
     const reply = await handleStatusCommand();
+    await bot.sendMessage(chatId, reply);
+    return;
+  }
+
+  // History command
+  if (/^\s*\/?(history|recent)\s*$/i.test(text)) {
+    const reply = await handleHistoryCommand();
+    await bot.sendMessage(chatId, reply, { parse_mode: "Markdown" });
+    return;
+  }
+
+  // Next command
+  if (/^\s*\/?next\s*$/i.test(text)) {
+    const reply = await handleNextCommand();
+    await bot.sendMessage(chatId, reply, { parse_mode: "Markdown" });
+    return;
+  }
+
+  // My songs command
+  if (/^\s*\/?(my\s*songs?|mine)\s*$/i.test(text)) {
+    const senderId = String(msg.from?.id || "");
+    const reply = await handleMySongsCommand(senderId);
+    await bot.sendMessage(chatId, reply, { parse_mode: "Markdown" });
+    return;
+  }
+
+  // Cancel command
+  if (/^\s*\/?cancel\s*$/i.test(text)) {
+    const senderId = String(msg.from?.id || "");
+    const reply = await handleCancelCommand(senderId);
     await bot.sendMessage(chatId, reply);
     return;
   }

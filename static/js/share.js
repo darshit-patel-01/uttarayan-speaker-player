@@ -3,7 +3,14 @@
 const qrModal = document.getElementById('qr-modal');
 const qrImgWrap = document.getElementById('qr-img-wrap');
 const qrUrlEl = document.getElementById('qr-url');
+const qrInstructions = document.getElementById('qr-instructions');
 const qrAdminConfig = document.getElementById('qr-admin-config');
+
+const QR_INSTRUCTIONS = {
+  whatsapp: 'Open your phone camera and point it at this code — it opens a WhatsApp chat. Send a song name or YouTube link to add it to the queue.',
+  telegram: 'Open your phone camera and point it at this code — it opens our Telegram bot. Send a song name or YouTube link to add it to the queue.',
+  web: 'Open your phone camera and point it at this code to open the song queue in your browser.',
+};
 const qrConfigResult = document.getElementById('qr-config-result');
 
 let _qrActiveTarget = 'whatsapp';
@@ -12,6 +19,16 @@ let _qrCurrentUrl = '';
 
 function _isAdmin() {
   return !!sessionStorage.getItem(AUTH_STORAGE_KEY);
+}
+
+function _showBridgeWarning(bridge, message) {
+  const existing = document.getElementById('bridge-warning-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.id = 'bridge-warning-toast';
+  toast.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10001;background:#fff3e0;color:#e65100;border:1px solid #ffb74d;border-radius:8px;padding:14px 20px;max-width:420px;font-size:0.85rem;box-shadow:0 4px 16px rgba(0,0,0,0.15);line-height:1.4;';
+  toast.innerHTML = `<strong>${bridge} number updated</strong><br>${message}<br><button onclick="this.parentElement.remove()" style="margin-top:8px;padding:4px 14px;border:1px solid #e65100;border-radius:4px;background:transparent;color:#e65100;cursor:pointer;font-size:0.8rem;">Got it</button>`;
+  document.body.appendChild(toast);
 }
 
 async function _loadShareConfig() {
@@ -30,7 +47,7 @@ function _qrTargetUrl(target) {
     const bot = _qrShareConfig.telegram_bot;
     return bot ? `https://t.me/${bot}` : '';
   }
-  return window.location.origin;
+  return _qrShareConfig.web_url || window.location.origin;
 }
 
 function _renderQr(target) {
@@ -47,8 +64,11 @@ function _renderQr(target) {
       : `${target === 'whatsapp' ? 'WhatsApp' : 'Telegram'} sharing is not set up yet.`;
     qrImgWrap.appendChild(msg);
     qrUrlEl.textContent = '';
+    qrInstructions.textContent = '';
     return;
   }
+
+  qrInstructions.textContent = QR_INSTRUCTIONS[target] || QR_INSTRUCTIONS.web;
 
   const img = document.createElement('img');
   img.src = `/share/qr?target=${target}&_t=${Date.now()}`;
@@ -56,6 +76,26 @@ function _renderQr(target) {
   img.style.cssText = 'width:220px; height:220px;';
   qrImgWrap.appendChild(img);
   qrUrlEl.textContent = url;
+
+  if (target === 'web') {
+    const isPublic = !!_qrShareConfig.public_url && url === _qrShareConfig.public_url;
+    const note = document.createElement('div');
+    note.style.cssText = `font-size:0.75rem; margin-top:4px; color:${isPublic ? '#2e7d32' : '#8a6d3b'};`;
+    note.textContent = isPublic
+      ? '\u{1F310} Public link — works from any network'
+      : '\u{1F512} Local network only — turn on the Tailscale funnel to share publicly';
+    qrUrlEl.appendChild(note);
+  }
+
+  const autoDetected = target === 'whatsapp'
+    ? _qrShareConfig.whatsapp_auto_detected
+    : target === 'telegram' ? _qrShareConfig.telegram_auto_detected : false;
+  if (autoDetected) {
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:0.75rem; margin-top:4px; color:#2e7d32;';
+    note.textContent = '\u{2713} Auto-detected from the connected bridge';
+    qrUrlEl.appendChild(note);
+  }
 }
 
 function _showConfigPanel(target) {
@@ -105,6 +145,7 @@ document.getElementById('qr-wa-save').addEventListener('click', async () => {
       qrConfigResult.style.cssText = 'font-size:0.8rem; margin-top:6px; color:#2e7d32;';
       qrConfigResult.textContent = 'Saved!';
       _renderQr('whatsapp');
+      _showBridgeWarning('WhatsApp', 'Update the WhatsApp bridge .env file with this number, then restart the bridge — otherwise incoming messages won\'t be consumed.');
     } else {
       qrConfigResult.style.cssText = 'font-size:0.8rem; margin-top:6px; color:#b71c1c;';
       qrConfigResult.textContent = 'Save failed.';
@@ -130,6 +171,7 @@ document.getElementById('qr-tg-save').addEventListener('click', async () => {
       qrConfigResult.style.cssText = 'font-size:0.8rem; margin-top:6px; color:#2e7d32;';
       qrConfigResult.textContent = 'Saved!';
       _renderQr('telegram');
+      _showBridgeWarning('Telegram', 'Update the Telegram bridge .env file with this bot token, then restart the bridge — otherwise incoming messages won\'t be consumed.');
     } else {
       qrConfigResult.style.cssText = 'font-size:0.8rem; margin-top:6px; color:#b71c1c;';
       qrConfigResult.textContent = 'Save failed.';

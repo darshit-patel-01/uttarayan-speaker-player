@@ -4,7 +4,7 @@ const AUTH_STORAGE_KEY = 'ytplayer_admin_auth';
 
 function getAuthHeader() {
   const token = sessionStorage.getItem(AUTH_STORAGE_KEY);
-  return token ? { Authorization: 'Basic ' + token } : {};
+  return token ? { Authorization: 'Bearer ' + token } : {};
 }
 
 const profileWidget = document.getElementById('profile-widget');
@@ -12,6 +12,7 @@ const profileIconText = document.getElementById('profile-icon-text');
 
 function setLoggedIn(username) {
   document.getElementById('login-form').style.display = 'none';
+  document.getElementById('login-result').style.display = 'none';
   const bar = document.getElementById('logged-in-bar');
   bar.style.display = 'flex';
   document.getElementById('logged-in-user').textContent = username;
@@ -80,32 +81,28 @@ loginForm.addEventListener('submit', async (e) => {
   const password = document.getElementById('login-password').value;
   if (!username || !password) return;
 
-  const token = btoa(`${username}:${password}`);
+  const basic = btoa(`${username}:${password}`);
   const loginBtn = document.getElementById('login-btn');
   loginBtn.disabled = true;
-  loginResult.className = '';
-  loginResult.textContent = 'Logging in...';
-  loginResult.style.display = 'block';
+  loginResult.style.display = 'none';
 
   try {
     const res = await fetch('/login', {
       method: 'POST',
-      headers: { Authorization: 'Basic ' + token },
+      headers: { Authorization: 'Basic ' + basic },
     });
     const data = await res.json();
 
     if (!res.ok) {
-      loginResult.className = 'err';
-      loginResult.textContent = formatError(data);
+      showToast(formatError(data), 'error');
     } else {
-      sessionStorage.setItem(AUTH_STORAGE_KEY, token);
-      loginResult.style.display = 'none';
+      sessionStorage.setItem(AUTH_STORAGE_KEY, data.token);
       document.getElementById('login-password').value = '';
       setLoggedIn(data.username);
+      showToast('Logged in!', 'success');
     }
   } catch (err) {
-    loginResult.className = 'err';
-    loginResult.textContent = 'Request failed: ' + err.message;
+    showToast('Request failed: ' + err.message, 'error');
   } finally {
     loginBtn.disabled = false;
   }
@@ -122,10 +119,9 @@ document.getElementById('logout-btn').addEventListener('click', () => {
     return;
   }
   try {
-    const res = await fetch('/login', {
-      method: 'POST',
-      headers: { Authorization: 'Basic ' + token },
-    });
+    // The session token is signed with a per-process secret, so this 401s
+    // after a server restart and drops us back to the login form.
+    const res = await fetch('/me', { headers: { Authorization: 'Bearer ' + token } });
     if (res.ok) {
       const data = await res.json();
       setLoggedIn(data.username);

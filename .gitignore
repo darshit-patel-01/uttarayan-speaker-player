@@ -12,12 +12,16 @@ venv
 .analytics.json
 .runtime_config.json
 .env
+# Browser session cookies for yt-dlp — these are live credentials, never commit them.
 cookies.txt
+*cookies*.txt
 uttarayan.db
 uttarayan.db-wal
 uttarayan.db-shm
 .messages.json
 .outbox.json
 .history.json
+.app.log
+.app.pid
 # Added by code-review-graph
 .code-review-graph/

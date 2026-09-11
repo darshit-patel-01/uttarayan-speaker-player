@@ -21,6 +21,23 @@ function makeSourceCell(source) {
   return td;
 }
 
+function showToast(message, type = 'success', duration = 3000) {
+  const existing = document.querySelector('.uttarayan-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.className = `uttarayan-toast ${type}`;
+  toast.dataset.shout = type === 'error' ? 'E Lapet!' : 'Kai Po Che!';
+  const icon = type === 'error' ? '\u{274C}' : '\u{1FA81}';
+  toast.innerHTML =
+    `<span class="toast-kites" aria-hidden="true"><span class="tk tk-a">\u{1FA81}</span><span class="tk tk-b">\u{1FA81}</span></span>` +
+    `<span style="font-size:1.3rem">${icon}</span><span>${message}</span>`;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add('out');
+    toast.addEventListener('animationend', () => toast.remove());
+  }, duration);
+}
+
 function formatError(data) {
   if (typeof data.detail === 'string') return data.detail;
   if (Array.isArray(data.detail)) {
@@ -29,16 +46,114 @@ function formatError(data) {
   return JSON.stringify(data);
 }
 
+// --- Shared quick-enqueue (prompts for a dedication when enabled) --------
+
+let dedicationsEnabled = true;
+
+const _qeModal = document.getElementById('quick-enqueue-modal');
+const _qeTitle = document.getElementById('quick-enqueue-title');
+const _qeName = document.getElementById('quick-enqueue-name');
+const _qeDedication = document.getElementById('quick-enqueue-dedication');
+let _qeResolve = null;
+
+function _qeSettle(value) {
+  const resolve = _qeResolve;
+  _qeResolve = null;
+  if (resolve) resolve(value);
+}
+
+document.getElementById('quick-enqueue-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const value = {
+    dedication_name: _qeName.value.trim() || undefined,
+    dedication: _qeDedication.value.trim() || undefined,
+  };
+  _qeModal.close();
+  _qeSettle(value);
+});
+
+document.getElementById('quick-enqueue-cancel-btn').addEventListener('click', () => _qeModal.close());
+_qeModal.addEventListener('close', () => _qeSettle(null));
+
+function askDedication(title) {
+  return new Promise(resolve => {
+    _qeName.value = '';
+    _qeDedication.value = '';
+    _qeTitle.textContent = title || '';
+    _qeResolve = resolve;
+    _qeModal.showModal();
+  });
+}
+
+async function quickEnqueue(song, btn) {
+  let dedicationFields = {};
+  if (dedicationsEnabled) {
+    const answer = await askDedication(song.title || song.url);
+    if (answer === null) return;
+    dedicationFields = answer;
+  }
+
+  const originalText = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+  try {
+    const res = await fetch('/enqueue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify({ urls: [song.url], ...dedicationFields }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(formatError(data), 'error');
+    } else if (data.enqueued && data.enqueued.length > 0) {
+      const s = data.enqueued[0];
+      showToast(`${s.title || 'Song'} queued! Position #${s.position_in_queue}, wait ${s.estimated_wait}`, 'success', 4000);
+      loadQueue();
+      loadWaitTime();
+      loadNowPlaying();
+    } else {
+      const rejection = data.rejected && data.rejected[0];
+      showToast(rejection ? rejection.reason : 'Rejected.', 'error');
+    }
+  } catch (err) {
+    showToast('Request failed: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = originalText; }
+  }
+}
+
+function makeEnqueueButton(song, className = 'small') {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = className;
+  btn.textContent = 'Enqueue';
+  btn.addEventListener('click', () => quickEnqueue(song, btn));
+  return btn;
+}
+
 // --- Tabs ----------------------------------------------------------------
 
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
+const _tabRefreshers = {};
+
+function registerTabRefresh(tabName, fn) { _tabRefreshers[tabName] = fn; }
 
 function switchTab(tabName) {
   tabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tabName));
   tabPanels.forEach(panel => panel.classList.toggle('active', panel.dataset.tab === tabName));
+  const refresher = _tabRefreshers[tabName];
+  if (refresher) refresher();
 }
 
 tabButtons.forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
 
 switchTab('enqueue');
+
+// --- Back to top button --------------------------------------------------
+const _backToTopBtn = document.getElementById('back-to-top');
+window.addEventListener('scroll', () => {
+  _backToTopBtn.classList.toggle('visible', window.scrollY > 300);
+});
+_backToTopBtn.addEventListener('click', () => {
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});

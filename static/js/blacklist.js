@@ -242,3 +242,5 @@ blacklistRequesterForm.addEventListener('submit', (e) => {
   addBlacklistRequester(blacklistRequesterSource.value, val);
   blacklistRequesterInput.value = '';
 });
+
+registerTabRefresh('blacklist', loadBlacklist);

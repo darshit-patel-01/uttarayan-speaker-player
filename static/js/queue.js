@@ -288,9 +288,7 @@ const skipResult = document.getElementById('skip-result');
 
 skipBtn.addEventListener('click', async () => {
   skipBtn.disabled = true;
-  skipResult.className = '';
-  skipResult.textContent = 'Skipping...';
-  skipResult.style.display = 'block';
+  skipResult.style.display = 'none';
 
   try {
     const res = await fetch('/skip', { method: 'POST', headers: getAuthHeader() });
@@ -301,18 +299,19 @@ skipBtn.addEventListener('click', async () => {
     const data = await res.json();
 
     if (!res.ok) {
-      skipResult.className = 'err';
-      skipResult.textContent = formatError(data);
+      showToast(formatError(data), 'error');
     } else {
-      skipResult.className = 'ok';
-      skipResult.textContent = 'Skip requested.';
+      showToast('Skip requested.', 'success');
       loadQueue();
       loadNowPlaying();
+      setTimeout(() => { loadQueue(); loadNowPlaying(); }, 2000);
+      setTimeout(() => { loadQueue(); loadNowPlaying(); }, 5000);
     }
   } catch (err) {
-    skipResult.className = 'err';
-    skipResult.textContent = 'Request failed: ' + err.message;
+    showToast('Request failed: ' + err.message, 'error');
   } finally {
     skipBtn.disabled = false;
   }
 });
+
+registerTabRefresh('queue', () => { loadQueue(); loadNowPlaying(); });
