@@ -94,6 +94,7 @@ async function enqueueFromSearch(song, btn) {
     const data = await res.json();
 
     if (!res.ok) {
+      showToast(formatError(data), 'error', 5000);
       btn.textContent = 'Failed';
       setTimeout(() => { btn.textContent = 'Enqueue'; btn.disabled = false; }, 2000);
       return;
@@ -124,11 +125,19 @@ async function enqueueFromSearch(song, btn) {
       loadWaitTime();
       loadNowPlaying();
     } else if (data.rejected && data.rejected.length > 0) {
+      const reason = data.rejected[0].reason || 'Rejected.';
+      showToast(reason, 'error', 5000);
       btn.textContent = 'Rejected';
-      btn.title = data.rejected[0].reason;
+      btn.title = reason;
       setTimeout(() => { btn.textContent = 'Enqueue'; btn.title = ''; btn.disabled = false; }, 3000);
     }
   } catch (err) {
+    // A SyntaxError here means the body wasn't JSON — almost always a dead
+    // or restarting server answering with an empty/HTML page.
+    const msg = err instanceof SyntaxError
+      ? 'Could not reach the server — is it running?'
+      : 'Request failed: ' + err.message;
+    showToast(msg, 'error', 5000);
     btn.textContent = 'Error';
     setTimeout(() => { btn.textContent = 'Enqueue'; btn.disabled = false; }, 2000);
   }
