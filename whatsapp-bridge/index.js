@@ -312,6 +312,46 @@ function formatReply(data) {
   return lines.join("\n\n") || "Nothing to report.";
 }
 
+// The linked account's own number, e.g. "919173386988:12@s.whatsapp.net" ->
+// "919173386988". Baileys appends a device suffix and the JID domain.
+function ownPhoneNumber(sock) {
+  const id = sock?.user?.id || "";
+  const digits = id.split("@")[0].split(":")[0].replace(/\D/g, "");
+  return digits || null;
+}
+
+// Tell the API which number it's reaching us on, so the share QR/wa.me link
+// tracks whatever phone the bridge is actually linked to instead of a value
+// hand-copied into .env that goes stale after a relink.
+async function registerOwnNumber(sock) {
+  const number = ownPhoneNumber(sock);
+  if (!number) {
+    console.warn("Could not determine the bridge's own WhatsApp number; skipping share-link registration.");
+    return;
+  }
+  console.log(`WhatsApp bridge is linked as +${number}`);
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
+    console.warn("ADMIN_USERNAME/ADMIN_PASSWORD not set — cannot auto-register the share link number.");
+    return;
+  }
+  const token = Buffer.from(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`).toString("base64");
+  try {
+    const res = await fetch(`${BASE_URL}/share/bridge-identity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Basic ${token}` },
+      body: JSON.stringify({ whatsapp_number: number }),
+    });
+    if (!res.ok) {
+      console.warn(`Share-link registration failed: HTTP ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    console.log(`Share link ${data.status === "updated" ? "updated to" : "already set to"} +${number}`);
+  } catch (err) {
+    console.warn(`Share-link registration failed: ${err.message}`);
+  }
+}
+
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
   // The version bundled with the npm package goes stale quickly (WhatsApp
@@ -348,6 +388,7 @@ async function start() {
       if (shouldReconnect) start();
     } else if (connection === "open") {
       console.log(`WhatsApp bridge connected. Forwarding YouTube links to ${ENQUEUE_URL}`);
+      registerOwnNumber(sock);
     }
   });
 

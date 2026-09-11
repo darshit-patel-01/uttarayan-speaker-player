@@ -104,6 +104,11 @@ async function enqueueFromSearch(song, btn) {
       btn.textContent = `#${s.position_in_queue}`;
       btn.style.background = '#2e7d32';
 
+      document.getElementById('dedication-name').value = '';
+      document.getElementById('dedication').value = '';
+      document.getElementById('search-query').value = '';
+      searchResults.innerHTML = '';
+
       if (s.id) {
         try {
           const tracked = JSON.parse(sessionStorage.getItem('_enqueued_song_ids') || '[]');

@@ -205,6 +205,4 @@ async function loadMessages() {
 }
 
 document.getElementById('refresh-messages-btn').addEventListener('click', loadMessages);
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  if (btn.dataset.tab === 'messages') btn.addEventListener('click', loadMessages);
-});
+registerTabRefresh('messages', loadMessages);

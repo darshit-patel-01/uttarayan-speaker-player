@@ -102,10 +102,11 @@
         </div>
       </div>
       <div id="qr-config-web" class="qr-config-panel" style="display:none;">
-        <p style="font-size:0.82rem; color:#555; margin:0;">Auto-detected from server URL — no config needed.</p>
+        <p style="font-size:0.82rem; color:#555; margin:0;">Auto-detected — uses the public Tailscale link when the funnel is on, otherwise this server's address. Toggle it under Settings &rsaquo; Share public (Tailscale) link.</p>
       </div>
       <div id="qr-config-result" style="font-size:0.8rem; margin-top:6px;"></div>
     </div>
+    <p id="qr-instructions" style="text-align:center; color:#555; font-size:0.84rem; margin:0 0 10px; line-height:1.45;"></p>
     <div id="qr-img-wrap" style="display:flex; justify-content:center; min-height:200px; align-items:center;"></div>
     <p style="text-align:center; color:#666; font-size:0.82rem; margin:8px 0 0;" id="qr-url"></p>
     <div style="display:flex; gap:8px; margin-top:12px; justify-content:center;">
@@ -253,7 +254,7 @@
       <h2 style="margin-top:24px;">Top 50 Most Requested Songs</h2>
       <div style="overflow-x:auto;">
         <table id="dashboard-songs-table" style="display:none;">
-          <thead><tr><th>#</th><th>Title</th><th>Times played</th></tr></thead>
+          <thead><tr><th>#</th><th>Title</th><th>Times played</th><th></th></tr></thead>
           <tbody id="dashboard-songs-body"></tbody>
         </table>
         <div id="dashboard-songs-empty" style="color:#888; font-size:0.9rem;">No songs played yet.</div>
@@ -403,6 +404,19 @@
     </div>
   </div>
 
+  <dialog id="quick-enqueue-modal">
+    <form id="quick-enqueue-form">
+      <h1 style="margin-bottom:6px;">Dedicate this song</h1>
+      <div id="quick-enqueue-title" style="font-size:0.85rem; color:#666; margin-bottom:12px;"></div>
+      <input type="text" id="quick-enqueue-name" placeholder="Your name (optional)" maxlength="100">
+      <input type="text" id="quick-enqueue-dedication" placeholder="Dedicate to... (optional)" maxlength="100" style="margin-top:8px;">
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button type="submit" style="flex:1;">Enqueue</button>
+        <button type="button" id="quick-enqueue-cancel-btn" class="secondary" style="flex:1;">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="new-playlist-modal">
     <form id="new-playlist-form">
       <h1 style="margin-bottom:12px;">New playlist</h1>
@@ -473,6 +487,7 @@
      utils (shared helpers + tabs) → now-playing (defines loadNowPlaying, adminAction) →
      feature modules (queue, playlists, etc.) → auth (last, because its startup IIFE
      calls setLoggedIn which invokes loadQueue/loadPlaylists/… from the other modules) -->
+<button id="back-to-top" title="Back to top" aria-label="Back to top">&#9650;</button>
 <script src="js/utils.js"></script>
 <script src="js/now-playing.js"></script>
 <script src="js/queue.js"></script>

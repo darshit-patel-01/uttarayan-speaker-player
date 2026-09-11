@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 
 import yt_dlp
@@ -63,9 +64,28 @@ def _download_audio(youtube_url: str, dest_dir: str, track_progress: bool = Fals
     if track_progress:
         _download_progress["percent"] = 0
         opts["progress_hooks"] = [_dl_progress_hook]
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(youtube_url, download=True)
-        return ydl.prepare_filename(info)
+
+    timeout = runtime_config.get("stuck_timeout_seconds") or 120
+    result = [None]
+    error = [None]
+
+    def _do_download():
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(youtube_url, download=True)
+                result[0] = ydl.prepare_filename(info)
+        except Exception as exc:
+            error[0] = exc
+
+    t = threading.Thread(target=_do_download, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+
+    if t.is_alive():
+        raise TimeoutError(f"Download stuck for {timeout}s: {youtube_url}")
+    if error[0]:
+        raise error[0]
+    return result[0]
 
 
 # ---------------------------------------------------------------------------

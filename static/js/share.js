@@ -3,7 +3,14 @@
 const qrModal = document.getElementById('qr-modal');
 const qrImgWrap = document.getElementById('qr-img-wrap');
 const qrUrlEl = document.getElementById('qr-url');
+const qrInstructions = document.getElementById('qr-instructions');
 const qrAdminConfig = document.getElementById('qr-admin-config');
+
+const QR_INSTRUCTIONS = {
+  whatsapp: 'Open your phone camera and point it at this code — it opens a WhatsApp chat. Send a song name or YouTube link to add it to the queue.',
+  telegram: 'Open your phone camera and point it at this code — it opens our Telegram bot. Send a song name or YouTube link to add it to the queue.',
+  web: 'Open your phone camera and point it at this code to open the song queue in your browser.',
+};
 const qrConfigResult = document.getElementById('qr-config-result');
 
 let _qrActiveTarget = 'whatsapp';
@@ -40,7 +47,7 @@ function _qrTargetUrl(target) {
     const bot = _qrShareConfig.telegram_bot;
     return bot ? `https://t.me/${bot}` : '';
   }
-  return window.location.origin;
+  return _qrShareConfig.web_url || window.location.origin;
 }
 
 function _renderQr(target) {
@@ -57,8 +64,11 @@ function _renderQr(target) {
       : `${target === 'whatsapp' ? 'WhatsApp' : 'Telegram'} sharing is not set up yet.`;
     qrImgWrap.appendChild(msg);
     qrUrlEl.textContent = '';
+    qrInstructions.textContent = '';
     return;
   }
+
+  qrInstructions.textContent = QR_INSTRUCTIONS[target] || QR_INSTRUCTIONS.web;
 
   const img = document.createElement('img');
   img.src = `/share/qr?target=${target}&_t=${Date.now()}`;
@@ -66,6 +76,26 @@ function _renderQr(target) {
   img.style.cssText = 'width:220px; height:220px;';
   qrImgWrap.appendChild(img);
   qrUrlEl.textContent = url;
+
+  if (target === 'web') {
+    const isPublic = !!_qrShareConfig.public_url && url === _qrShareConfig.public_url;
+    const note = document.createElement('div');
+    note.style.cssText = `font-size:0.75rem; margin-top:4px; color:${isPublic ? '#2e7d32' : '#8a6d3b'};`;
+    note.textContent = isPublic
+      ? '\u{1F310} Public link — works from any network'
+      : '\u{1F512} Local network only — turn on the Tailscale funnel to share publicly';
+    qrUrlEl.appendChild(note);
+  }
+
+  const autoDetected = target === 'whatsapp'
+    ? _qrShareConfig.whatsapp_auto_detected
+    : target === 'telegram' ? _qrShareConfig.telegram_auto_detected : false;
+  if (autoDetected) {
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:0.75rem; margin-top:4px; color:#2e7d32;';
+    note.textContent = '\u{2713} Auto-detected from the connected bridge';
+    qrUrlEl.appendChild(note);
+  }
 }
 
 function _showConfigPanel(target) {

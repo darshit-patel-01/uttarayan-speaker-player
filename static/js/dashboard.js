@@ -165,6 +165,7 @@ function renderDashboardSongsPage() {
     const tr = document.createElement('tr');
     const rankTd = document.createElement('td'); rankTd.textContent = start + i + 1; tr.appendChild(rankTd);
     const titleTd = document.createElement('td');
+    titleTd.className = 'title-cell';
     if (row.url) {
       const a = document.createElement('a');
       a.href = row.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
@@ -175,6 +176,9 @@ function renderDashboardSongsPage() {
     }
     tr.appendChild(titleTd);
     const countTd = document.createElement('td'); countTd.textContent = row.count; tr.appendChild(countTd);
+    const actionTd = document.createElement('td');
+    if (row.url) actionTd.appendChild(makeEnqueueButton(row));
+    tr.appendChild(actionTd);
     songBody.appendChild(tr);
   });
 
@@ -215,9 +219,7 @@ async function loadDashboard() {
     dashboardSongsPage = 1;
     renderDashboardSongsPage();
   } catch (err) {
-    resultEl.className = 'err';
-    resultEl.textContent = 'Failed to load dashboard: ' + err.message;
-    resultEl.style.display = 'block';
+    showToast('Failed to load dashboard: ' + err.message, 'error');
   }
 }
 
@@ -265,3 +267,5 @@ document.getElementById('export-stats-btn').addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(url);
 });
+
+registerTabRefresh('dashboard', loadDashboard);

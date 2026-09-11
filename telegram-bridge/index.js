@@ -284,8 +284,36 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 bot.on("polling_error", (err) => console.error("Polling error:", err.message));
 
+// Tell the API which bot we're actually signed in as, so the share QR/t.me
+// link tracks this token instead of a handle hand-copied into the settings
+// that goes stale after a new BotFather token.
+async function registerOwnUsername(username) {
+  if (!username) return;
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
+    console.warn("ADMIN_USERNAME/ADMIN_PASSWORD not set — cannot auto-register the share link bot.");
+    return;
+  }
+  const token = Buffer.from(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`).toString("base64");
+  try {
+    const res = await fetch(`${BASE_URL}/share/bridge-identity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Basic ${token}` },
+      body: JSON.stringify({ telegram_bot: username }),
+    });
+    if (!res.ok) {
+      console.warn(`Share-link registration failed: HTTP ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    console.log(`Share link ${data.status === "updated" ? "updated to" : "already set to"} @${username}`);
+  } catch (err) {
+    console.warn(`Share-link registration failed: ${err.message}`);
+  }
+}
+
 bot.getMe().then((me) => {
   console.log(`Telegram bridge connected as @${me.username}. Forwarding YouTube links to ${ENQUEUE_URL}`);
+  registerOwnUsername(me.username);
 });
 
 // Poll every 10s for admin replies to deliver to blocked users

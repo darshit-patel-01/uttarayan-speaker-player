@@ -177,17 +177,14 @@ newPlaylistForm.addEventListener('submit', async (e) => {
     const data = await res.json();
 
     if (!res.ok) {
-      playlistsResult.className = 'err';
-      playlistsResult.textContent = formatError(data);
-      playlistsResult.style.display = 'block';
+      showToast(formatError(data), 'error');
     } else {
       newPlaylistModal.close();
+      showToast('Playlist created!', 'success');
       loadPlaylists();
     }
   } catch (err) {
-    playlistsResult.className = 'err';
-    playlistsResult.textContent = 'Request failed: ' + err.message;
-    playlistsResult.style.display = 'block';
+    showToast('Request failed: ' + err.message, 'error');
   } finally {
     newPlaylistSaveBtn.disabled = false;
   }
@@ -299,46 +296,9 @@ async function loadManagedPlaylistSongs() {
       removeBtn.addEventListener('click', () => removeManagedPlaylistSong(song.id, removeBtn));
       actionCell.appendChild(removeBtn);
 
-      const plEnqBtn = document.createElement('button');
-      plEnqBtn.type = 'button';
-      plEnqBtn.className = 'small';
+      const plEnqBtn = makeEnqueueButton(song);
       plEnqBtn.style.marginLeft = '6px';
-      plEnqBtn.textContent = 'Enqueue';
-      const plEnqResult = document.createElement('div');
-      plEnqResult.className = 'history-enqueue-result';
-      plEnqBtn.addEventListener('click', async () => {
-        plEnqBtn.disabled = true;
-        plEnqResult.className = 'history-enqueue-result';
-        plEnqResult.textContent = 'Enqueueing…';
-        try {
-          const r = await fetch('/enqueue', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-            body: JSON.stringify({ urls: [song.url] }),
-          });
-          const d = await r.json();
-          if (!r.ok) {
-            plEnqResult.className = 'history-enqueue-result err';
-            plEnqResult.textContent = formatError(d);
-          } else if (d.enqueued && d.enqueued.length > 0) {
-            const s = d.enqueued[0];
-            plEnqResult.className = 'history-enqueue-result ok';
-            plEnqResult.textContent = `✓ Position ${s.position_in_queue}, wait ${s.estimated_wait}`;
-            loadNowPlaying();
-            loadWaitTime();
-          } else {
-            plEnqResult.className = 'history-enqueue-result err';
-            plEnqResult.textContent = d.rejected?.[0]?.reason || 'Rejected.';
-          }
-        } catch (err) {
-          plEnqResult.className = 'history-enqueue-result err';
-          plEnqResult.textContent = 'Request failed.';
-        } finally {
-          plEnqBtn.disabled = false;
-        }
-      });
       actionCell.appendChild(plEnqBtn);
-      actionCell.appendChild(plEnqResult);
       row.appendChild(actionCell);
 
       row.draggable = true;
@@ -425,21 +385,18 @@ managePlaylistAddForm.addEventListener('submit', async (e) => {
     const data = await res.json();
 
     if (!res.ok) {
-      managePlaylistResult.className = 'err';
-      managePlaylistResult.textContent = formatError(data);
+      showToast(formatError(data), 'error');
     } else if (data.added.length > 0) {
-      managePlaylistResult.style.display = 'none';
       managePlaylistUrlInput.value = '';
+      showToast('Song added to playlist!', 'success');
       loadManagedPlaylistSongs();
       loadPlaylists();
     } else {
       const rejection = data.rejected[0];
-      managePlaylistResult.className = 'err';
-      managePlaylistResult.textContent = rejection ? rejection.reason : 'Rejected.';
+      showToast(rejection ? rejection.reason : 'Rejected.', 'error');
     }
   } catch (err) {
-    managePlaylistResult.className = 'err';
-    managePlaylistResult.textContent = 'Request failed: ' + err.message;
+    showToast('Request failed: ' + err.message, 'error');
   } finally {
     managePlaylistAddBtn.disabled = false;
   }
@@ -449,3 +406,5 @@ managePlaylistCloseBtn.addEventListener('click', () => {
   managePlaylistModal.close();
   currentManagedPlaylistId = null;
 });
+
+registerTabRefresh('playlists', loadPlaylists);

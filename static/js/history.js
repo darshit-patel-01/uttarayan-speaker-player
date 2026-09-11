@@ -141,45 +141,7 @@ async function loadHistory(page) {
       const actionCell = document.createElement('td');
       actionCell.style.minWidth = '130px';
 
-      const enqBtn = document.createElement('button');
-      enqBtn.type = 'button';
-      enqBtn.className = 'small';
-      enqBtn.textContent = 'Enqueue';
-      const enqResult = document.createElement('div');
-      enqResult.className = 'history-enqueue-result';
-
-      enqBtn.addEventListener('click', async () => {
-        enqBtn.disabled = true;
-        enqResult.className = 'history-enqueue-result';
-        enqResult.textContent = 'Enqueueing…';
-        try {
-          const r = await fetch('/enqueue', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-            body: JSON.stringify({ urls: [song.url] }),
-          });
-          const d = await r.json();
-          if (!r.ok) {
-            enqResult.className = 'history-enqueue-result err';
-            enqResult.textContent = formatError(d);
-          } else if (d.enqueued && d.enqueued.length > 0) {
-            enqResult.className = 'history-enqueue-result ok';
-            enqResult.textContent = `✓ Queued! Wait: ${d.enqueued[0].estimated_wait}`;
-            loadNowPlaying();
-          } else {
-            enqResult.className = 'history-enqueue-result err';
-            enqResult.textContent = (d.rejected && d.rejected[0]) ? d.rejected[0].reason : 'Rejected.';
-          }
-        } catch (_) {
-          enqResult.className = 'history-enqueue-result err';
-          enqResult.textContent = 'Request failed.';
-        } finally {
-          enqBtn.disabled = false;
-        }
-      });
-
-      actionCell.appendChild(enqBtn);
-      actionCell.appendChild(enqResult);
+      actionCell.appendChild(makeEnqueueButton(song));
 
       if (isAdmin) {
         const plBtn = document.createElement('button');
@@ -232,6 +194,4 @@ document.getElementById('history-search').addEventListener('input', () => loadHi
 document.getElementById('history-prev-btn').addEventListener('click', () => loadHistory(historyPage - 1));
 document.getElementById('history-next-btn').addEventListener('click', () => loadHistory(historyPage + 1));
 
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  if (btn.dataset.tab === 'history') btn.addEventListener('click', () => loadHistory(1));
-});
+registerTabRefresh('history', () => loadHistory(1));

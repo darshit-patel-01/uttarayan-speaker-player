@@ -55,6 +55,26 @@ SPEC: dict = {
         "label": "Song dedications",
         "help": "Allow requesters to add a dedication message announced via TTS before the song.",
     },
+    "stuck_timeout_seconds": {
+        "type": "int", "min": 30, "max": 600, "unit": "seconds",
+        "label": "Stuck song timeout",
+        "help": "Auto-skip a song if download + playback doesn't start within this many seconds.",
+    },
+    "playlist_mode": {
+        "type": "bool",
+        "label": "Playlist mode",
+        "help": "When enabled, user song requests are rejected — only the admin playlist plays.",
+    },
+    "duplicate_history_count": {
+        "type": "int", "min": 0, "max": 50, "unit": "songs",
+        "label": "Duplicate history check",
+        "help": "Reject a song if it was played within the last N songs. 0 disables the check.",
+    },
+    "use_public_url": {
+        "type": "bool",
+        "label": "Share public (Tailscale) link",
+        "help": "When this machine is exposed through Tailscale Funnel, share that public https link in the QR code instead of the local address. Falls back to the local address whenever the funnel is off.",
+    },
     "tts_language": {
         "type": "choice",
         "choices": ["hi", "en"],

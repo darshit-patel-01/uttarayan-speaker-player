@@ -2,6 +2,7 @@ import re
 from typing import Optional
 
 import queue_state
+import runtime_config
 
 # Same URL shapes producer_api.py accepts requests for.
 YOUTUBE_URL_RE = re.compile(
@@ -26,8 +27,20 @@ def extract_video_id(url: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _recently_played_reason(video_id: str) -> Optional[str]:
+    """Reject if this video was played within the last N songs (configurable)."""
+    count = runtime_config.get("duplicate_history_count") or 0
+    if count <= 0:
+        return None
+    history = queue_state.get_history(page=1, per_page=count)
+    for song in history.get("songs", []):
+        if song.get("video_id") == video_id:
+            return "This song was played recently. Please try a different song."
+    return None
+
+
 def duplicate_reason(video_id: Optional[str]) -> Optional[str]:
-    """Returns a rejection reason if this video is already queued, else None."""
+    """Returns a rejection reason if this video is already queued or was recently played."""
     if not video_id:
         return None
     duplicate = queue_state.find_by_video_id(video_id)
@@ -36,4 +49,4 @@ def duplicate_reason(video_id: Optional[str]) -> Optional[str]:
             and not duplicate.get("skip_requested")):
         wait_str = queue_state.format_duration(duplicate["estimated_wait_seconds"])
         return f"Your requested song is already in queue, will play after {wait_str}"
-    return None
+    return _recently_played_reason(video_id)

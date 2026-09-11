@@ -14,10 +14,9 @@ fails fast, before paying for a yt-dlp network probe:
   6. Content checks: age-restriction / category / duration (content.py —
      the expensive yt-dlp probe).
 
-Admin requests bypass checks 2 and 4–6, but NOT 1 or 3: a video blacklist is
+Admin requests bypass checks 2–6, but NOT 1: a video blacklist is
 a hard content ban that applies to everyone (blocking a video means it never
-plays, admin included), and the duplicate check always runs so admins can't
-double-queue the same video. The requester blacklist stays admin-exempt so
+plays, admin included). The requester blacklist stays admin-exempt so
 the operator can never lock themselves out.
 
 The rate limit is only actually counted (record()) once a song clears every
@@ -64,8 +63,11 @@ def validate_song_request(url: str, *, requester_id: str, is_admin: bool) -> Val
             False, "This song is blocked. Remove it from the blacklist to play it.", {}, video_id
         )
 
-    # Requester blacklist bans a guest by phone/Telegram id/IP. Admins are
-    # exempt so the operator can never accidentally lock themselves out.
+    if not is_admin and runtime_config.get("playlist_mode"):
+        return ValidationResult(
+            False, "Song requests are currently disabled — the playlist is playing.", {}, video_id
+        )
+
     if not is_admin and blacklist.is_requester_blacklisted(requester_id):
         return ValidationResult(
             False,
@@ -76,9 +78,10 @@ def validate_song_request(url: str, *, requester_id: str, is_admin: bool) -> Val
             video_id,
         )
 
-    dup_reason = duplicate_reason(video_id)
-    if dup_reason:
-        return ValidationResult(False, dup_reason, {}, video_id)
+    if not is_admin:
+        dup_reason = duplicate_reason(video_id)
+        if dup_reason:
+            return ValidationResult(False, dup_reason, {}, video_id)
 
     if not is_admin:
         # Queue-full: reject when the total estimated wait already exceeds the

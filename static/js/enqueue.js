@@ -1,8 +1,9 @@
 // --- Enqueue (open to everyone) -----------------------------------------
 
 const waitTimeBanner = document.getElementById('wait-time-banner');
+const dedicationFields = document.querySelector('.dedication-fields');
 
-let waitTimeState = { loaded: false, queueLength: 0, estimatedWaitSeconds: 0 };
+let waitTimeState = { loaded: false, queueLength: 0, estimatedWaitSeconds: 0, dedicationsEnabled: true };
 
 function formatDurationLocal(totalSeconds) {
   totalSeconds = Math.max(0, Math.round(totalSeconds));
@@ -35,7 +36,10 @@ async function loadWaitTime() {
       loaded: true,
       queueLength: data.queue_length,
       estimatedWaitSeconds: data.estimated_wait_seconds,
+      dedicationsEnabled: data.dedications_enabled !== false,
     };
+    dedicationsEnabled = waitTimeState.dedicationsEnabled;
+    dedicationFields.style.display = dedicationsEnabled ? '' : 'none';
     renderWaitTimeBanner();
   } catch (err) {
     waitTimeBanner.textContent = 'Could not load current wait time.';
@@ -67,9 +71,7 @@ form.addEventListener('submit', async (e) => {
   const dedication = dedicationInput.value.trim() || undefined;
 
   submitBtn.disabled = true;
-  result.className = '';
-  result.textContent = 'Enqueuing...';
-  result.style.display = 'block';
+  result.style.display = 'none';
 
   try {
     const res = await fetch('/enqueue', {
@@ -80,16 +82,13 @@ form.addEventListener('submit', async (e) => {
     const data = await res.json();
 
     if (!res.ok) {
-      result.className = 'err';
-      result.textContent = formatError(data);
+      showToast(formatError(data), 'error');
     } else if (data.enqueued.length > 0) {
       const song = data.enqueued[0];
-      result.className = 'ok';
-      result.textContent =
-        `Queued! ID: ${song.id}\n` +
-        `${song.title || '(unknown title)'} — ${song.uploader || '(unknown uploader)'}\n` +
-        `Position ${song.position_in_queue}, duration ${song.duration}, ` +
-        `estimated wait ${song.estimated_wait}.`;
+      showToast(
+        `${song.title || 'Song'} queued! Position #${song.position_in_queue}, wait ${song.estimated_wait}`,
+        'success', 4000
+      );
       urlInput.value = '';
       dedicationNameInput.value = '';
       dedicationInput.value = '';
@@ -110,14 +109,14 @@ form.addEventListener('submit', async (e) => {
       loadNowPlaying();
     } else {
       const rejection = data.rejected[0];
-      result.className = 'err';
-      result.textContent = rejection ? rejection.reason : 'Rejected.';
+      showToast(rejection ? rejection.reason : 'Rejected.', 'error');
       urlInput.value = '';
     }
   } catch (err) {
-    result.className = 'err';
-    result.textContent = 'Request failed: ' + err.message;
+    showToast('Request failed: ' + err.message, 'error');
   } finally {
     submitBtn.disabled = false;
   }
 });
+
+registerTabRefresh('enqueue', () => { loadWaitTime(); loadNowPlaying(); });
