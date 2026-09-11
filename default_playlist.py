@@ -1,7 +1,7 @@
 """
 Admin-managed fallback playlists: named, looping lists of songs. Whichever
-one is marked active is what the consumer plays automatically whenever the
-real (Kafka-backed) queue is empty.
+one is marked active is what the player plays automatically whenever the
+real request queue is empty.
 
 Uses SQLite (via db module) for persistent storage.
 """

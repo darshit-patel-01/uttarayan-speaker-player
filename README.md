@@ -1,36 +1,38 @@
 # Uttarayan Song Queue
 
 A self-hosted YouTube-audio jukebox for a shared event. Guests submit YouTube
-links via a web form, WhatsApp, or Telegram; songs are validated, queued via
-Kafka, and played back-to-back through the host machine's speakers with a
+links via a web form, WhatsApp, or Telegram; songs are validated, queued in
+SQLite, and played back-to-back through the host machine's speakers with a
 cheerful Hindi TTS announcement between tracks.
 
 ## How it works
 
 1. **`producer_api.py`** — FastAPI on port 8000. `POST /enqueue` hands each
-   URL to `real_time_validation/` and, if it passes, adds it to both
-   `queue_state.json` and Kafka.
+   URL to `real_time_validation/` and, if it passes, inserts it into the
+   `queue_items` table in SQLite.
 2. **`real_time_validation/`** — the single validation path for every request,
    regardless of whether it came from the web UI, the WhatsApp bridge, or the
-   Telegram bridge: duplicate-in-queue check, per-requester rate limiting
-   (Redis), and content checks (age-restriction, music category, duration).
+   Telegram bridge: duplicate-in-queue check, per-requester rate limiting,
+   and content checks (age-restriction, music category, duration).
    See [Validation](#validation) below.
-3. **Kafka** — single local broker via Docker Compose. Used only for reliable
-   delivery; play order is governed by `queue_state.json`, not Kafka offset.
-4. **Redis** — also via Docker Compose. Backs the rate limiter in
-   `real_time_validation/`.
-5. **`consumer_worker.py`** — long-running player. Reads play order from
-   `queue_state.json`, downloads audio with `yt-dlp`, plays via `ffplay`,
-   speaks a Hindi TTS announcement between tracks. Commits Kafka messages on
-   receipt so songs survive a restart.
-6. **`static/index.html`** — single-file web UI: enqueue form, live now-playing
+3. **SQLite (`uttarayan.db`)** — the one shared store. Queue, play history,
+   playlists, blacklists, settings, rate-limit counters and admin messages all
+   live here; WAL mode lets the API and the player read and write it
+   concurrently. No external services are needed.
+4. **`consumer_worker.py`** — long-running player. Polls `queue_items` for the
+   next queued row, downloads audio with `yt-dlp`, plays via `mpv`, speaks a
+   TTS announcement between tracks.
+5. **`static/index.html`** — single-file web UI: enqueue form, live now-playing
    banner with admin controls, queue manager, play history.
 
 ## Prerequisites
 
-- Docker (for the local Kafka broker and Redis)
 - Python 3.10+
-- `ffmpeg` on your `PATH` (provides `ffplay` for playback)
+- `mpv` on your `PATH` (playback)
+  - Windows: `winget install mpv`
+  - macOS: `brew install mpv`
+  - Ubuntu/Debian: `sudo apt install mpv`
+- `ffmpeg` on your `PATH` (audio extraction for `yt-dlp`)
   - Windows: `winget install ffmpeg`
   - macOS: `brew install ffmpeg`
   - Ubuntu/Debian: `sudo apt install ffmpeg`
@@ -38,16 +40,20 @@ cheerful Hindi TTS announcement between tracks.
 
 ## Setup
 
-```bash
-# 1. Start Kafka + Redis
-docker compose up -d
+**Windows:** double-click `start.bat`. On first run it creates the virtualenv
+and installs dependencies itself, then starts the app. You only need Python,
+`mpv` and `ffmpeg` installed (see above). Later runs start straight away, and
+it re-installs dependencies automatically if `requirements.txt` changes.
 
-# 2. Create virtualenv and install dependencies
+**Manual / other platforms:**
+
+```bash
+# 1. Create virtualenv and install dependencies
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# 3. Configure environment
+# 2. Configure environment
 cp .env.example .env
 # Edit .env — set ADMIN_PASSWORD at minimum
 ```
@@ -58,24 +64,20 @@ cp .env.example .env
 python run.py
 ```
 
-Starts Kafka, the API (port 8000), the consumer, and the WhatsApp/Telegram
-bridges (if set up — see below) together. `Ctrl+C` stops all of them. Add
-`--stop-kafka` to also tear down the Kafka container on exit, or
+Starts the API (port 8000), the player, and the WhatsApp/Telegram bridges
+(if set up — see below) together. `Ctrl+C` stops all of them. Add
 `--no-whatsapp` / `--no-telegram` to skip a bridge. Each bridge is skipped
 automatically if its `node_modules` isn't installed yet, and the Telegram
 bridge is also skipped if `TELEGRAM_BOT_TOKEN` isn't set in its `.env`.
 
-**Windows one-command start:** `start.bat` (or `.\start.ps1`) also launches
-Docker Desktop if it isn't already running, waits for the daemon to be ready,
-then runs `run.py` using `venv\Scripts\python.exe` — no manual venv
-activation needed. The venv must already exist (step 2 above).
+If the app is already running, a second `python run.py` (or `start.bat`)
+attaches to its log output instead of starting a duplicate; `Ctrl+C` there
+stops the running app.
 
 <details>
 <summary>Running pieces separately (useful for debugging)</summary>
 
 ```bash
-docker compose up -d
-
 # Terminal 1 — player
 python consumer_worker.py
 
@@ -259,12 +261,13 @@ network probe below):
    queued and hasn't been skipped.
 3. **Rate limit** (`rate_limiter.py`) — rejected if the requester has already
    enqueued `RATE_LIMIT_MAX_SONGS` (default 3) songs in the last
-   `RATE_LIMIT_WINDOW_SECONDS` (default 1 hour). Counted in Redis, keyed by
-   the requester's phone number (WhatsApp), Telegram user id, or IP address
-   (plain web/API requests). Only successfully-validated songs count against
-   the limit — a rejected attempt doesn't burn a slot. If Redis is
-   unreachable, this check fails **open** (request allowed, not counted) so a
-   Redis outage can't silently stop the music.
+   `RATE_LIMIT_WINDOW_SECONDS` (default 1 hour). Counted in the SQLite
+   `rate_limits` table, keyed by the requester's phone number (WhatsApp),
+   Telegram user id, or IP address (plain web/API requests). Only
+   successfully-validated songs count against the limit — a rejected attempt
+   doesn't burn a slot. If the database is unreachable, this check fails
+   **open** (request allowed, not counted) so a storage hiccup can't silently
+   stop the music.
 4. **Content** (`content.py`) — probes the URL via yt-dlp (no download):
    - **Age-restricted** — rejected if YouTube's `age_limit` is 18+
    - **Not music** — rejected unless the video's category is `Music` or it
@@ -372,15 +375,17 @@ Run `python test_download.py` to diagnose which client works on your machine.
 
 ## Queue ordering and restart safety
 
-`queue_state.json` is the authoritative source for both play order and song
-metadata (URL, title, duration). Kafka delivers new songs reliably; once a
-message arrives, it is committed immediately and `queue_state.json` takes over.
+The SQLite `queue_items` table is the authoritative source for both play
+order and song metadata (URL, title, duration). The API inserts accepted
+songs there and the player polls it (every 200 ms while idle) for the next
+queued row, so nothing else has to be running for a request to reach the
+speakers.
 
 On restart:
 - Any song stuck as `"playing"` (from a crash) is reset to `"queued"` and
   replayed from the start.
-- Songs in the queue that haven't played yet are picked up from `queue_state.json`
-  in order — no songs are lost even if Kafka has no uncommitted messages.
+- Songs in the queue that haven't played yet are picked up in order — no
+  songs are lost across a restart.
 
 ## Fallback / default playlists
 
@@ -404,14 +409,7 @@ Current public URL (while Funnel is active): `https://darshitwindos.tailb36c4a.t
 |---|---|---|
 | `ADMIN_USERNAME` | `admin` | Admin login username |
 | `ADMIN_PASSWORD` | *(required)* | Admin login password — must be set |
-| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker address |
-| `KAFKA_TOPIC` | `youtube_queue` | Kafka topic name |
-| `KAFKA_GROUP_ID` | `ytplayer` | Consumer group ID |
-| `KAFKA_MAX_POLL_INTERVAL_MS` | `21600000` (6 h) | Max poll interval — must exceed your longest song |
 | `MAX_DURATION_SECONDS` | `7200` (2 h) | Songs longer than this are rejected |
-| `REDIS_HOST` | `127.0.0.1` | Redis host (rate limiter) |
-| `REDIS_PORT` | `6380` | Redis port — not 6379, to avoid colliding with another local Redis-compatible server |
-| `REDIS_DB` | `0` | Redis logical DB index |
 | `RATE_LIMIT_MAX_SONGS` | `3` | Max songs per requester per window |
 | `RATE_LIMIT_WINDOW_SECONDS` | `3600` (1 h) | Rate limit window length |
 | `NORMALIZE_VOLUME` | `true` | Apply ffplay's `loudnorm` filter to every song |
@@ -422,13 +420,13 @@ Current public URL (while Funnel is active): `https://darshitwindos.tailb36c4a.t
 
 ## Notes
 
-- **Single consumer / single partition** — strict in-order playback requires
-  exactly one `consumer_worker.py` instance. Two instances would play over each other.
-- **confluent-kafka** — used instead of `kafka-python` (unmaintained, protocol
-  issues with modern brokers). Ships prebuilt wheels; no native install needed.
+- **Single player** — strict in-order playback requires exactly one
+  `consumer_worker.py` instance. Two instances would play over each other.
+- **SQLite instead of a message broker** — the API and player only ever share
+  state through one local database file. That is the whole hand-off, so
+  there is nothing extra to install or keep running; the trade-off is that
+  both processes have to be on the same machine, which is how this is used.
 - **Download-then-play** — each song is fully downloaded to a temp directory
   before playback starts. This adds a brief startup delay per song but avoids
   mid-song CDN drops that would cut playback short with no recovery path.
   The temp file is deleted once playback ends.
-- **`KAFKA_MAX_POLL_INTERVAL_MS`** — the consumer blocks for an entire song
-  between Kafka polls. Set to 6 hours by default; override if you queue anything longer.

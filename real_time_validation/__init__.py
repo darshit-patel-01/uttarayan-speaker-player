@@ -10,7 +10,7 @@ fails fast, before paying for a yt-dlp network probe:
   2. Blacklisted requester? (blacklist.py — local file, no network)
   3. Already queued? (duplicate.py — local file, no network)
   4. Queue full? (total estimated wait over max_queue_wait_seconds — local file)
-  5. Rate limit headroom? (rate_limiter.py — one Redis round trip)
+  5. Rate limit headroom? (rate_limiter.py — one SQLite read)
   6. Content checks: age-restriction / category / duration (content.py —
      the expensive yt-dlp probe).
 

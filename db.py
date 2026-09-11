@@ -143,6 +143,12 @@ CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS rate_limits (
+    requester_id TEXT PRIMARY KEY,
+    count INTEGER NOT NULL,
+    window_ends_at REAL NOT NULL
+);
 """
 
 

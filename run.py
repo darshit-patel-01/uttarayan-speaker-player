@@ -1,43 +1,55 @@
 """
 Single entry point for the whole project.
 
-Starts Kafka (docker compose up -d), waits until it's reachable, then
-launches the API server, the consumer/player, and the WhatsApp/Telegram
-bridges as child processes. Ctrl+C stops everything (Kafka container keeps
-running; add --stop-kafka to also tear it down).
+Launches the API server, the player, and the WhatsApp/Telegram bridges as
+child processes. Everything they share lives in the SQLite database, so
+there are no external services to start first. Ctrl+C stops everything.
 
 If the app is already running (port 8000 occupied), the second invocation
 attaches to the shared log file instead of starting a duplicate.
 """
+import json
 import os
 import signal
 import socket
 import subprocess
 import sys
 import time
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(HERE, ".app.log")
 PID_FILE = os.path.join(HERE, ".app.pid")
 WHATSAPP_BRIDGE_DIR = os.path.join(HERE, "whatsapp-bridge")
 TELEGRAM_BRIDGE_DIR = os.path.join(HERE, "telegram-bridge")
-KAFKA_HOST = os.getenv("KAFKA_HOST", "localhost")
-KAFKA_PORT = int(os.getenv("KAFKA_PORT", "9092"))
-REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6380"))
 API_PORT = int(os.getenv("API_PORT", "8000"))
-STOP_KAFKA_ON_EXIT = "--stop-kafka" in sys.argv
 SKIP_WHATSAPP = "--no-whatsapp" in sys.argv
 SKIP_TELEGRAM = "--no-telegram" in sys.argv
 
 procs = []
 
 
-def is_already_running():
+def _port_in_use():
     try:
         with socket.create_connection(("localhost", API_PORT), timeout=1):
             return True
     except OSError:
+        return False
+
+
+def is_already_running():
+    """
+    True only if OUR app is answering on the port. Something else squatting
+    on it (Splunk's web UI defaults to 8000, for one) must not be mistaken for
+    a running instance, or start.bat would "attach" to nothing forever.
+    """
+    if not _port_in_use():
+        return False
+    try:
+        with urllib.request.urlopen(f"http://localhost:{API_PORT}/wait-time", timeout=2) as resp:
+            body = json.load(resp)
+        return isinstance(body, dict) and "queue_length" in body
+    except (OSError, ValueError):
         return False
 
 
@@ -75,20 +87,6 @@ def attach_to_logs():
         else:
             print("\nCould not find app PID — stop it manually.")
         sys.exit(0)
-
-
-def wait_for_port(name, host, port, timeout=60):
-    print(f"Waiting for {name} at {host}:{port}...")
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=2):
-                print(f"{name} is up.")
-                return True
-        except OSError:
-            time.sleep(2)
-    print(f"Timed out waiting for {name}. Is Docker running?")
-    return False
 
 
 def env_has_value(env_path, key):
@@ -135,9 +133,6 @@ def shutdown(signum=None, frame=None):
         os.unlink(PID_FILE)
     except OSError:
         pass
-    if STOP_KAFKA_ON_EXIT:
-        print("Stopping Kafka (docker compose down)...")
-        subprocess.run(["docker", "compose", "down"], cwd=HERE)
     sys.exit(0)
 
 
@@ -181,6 +176,12 @@ def main():
         attach_to_logs()
         return
 
+    if _port_in_use():
+        print(f"Port {API_PORT} is already taken by another program (not this app), so the")
+        print(f"API can't start. Either stop that program, or set API_PORT in .env to a")
+        print(f"free port (e.g. API_PORT=8010) and run this again.")
+        sys.exit(1)
+
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
@@ -193,15 +194,6 @@ def main():
     sys.stdout = _Tee(sys.__stdout__, log_fh)
     sys.stderr = _Tee(sys.__stderr__, log_fh)
 
-    print("Starting Kafka + Redis (docker compose up -d)...")
-    subprocess.run(["docker", "compose", "up", "-d"], cwd=HERE, check=True)
-
-    if not wait_for_port("Kafka", KAFKA_HOST, KAFKA_PORT):
-        shutdown()
-        return
-
-    wait_for_port("Redis", REDIS_HOST, REDIS_PORT, timeout=20)
-
     print(f"Starting API server on http://localhost:{API_PORT} ...")
     api = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "producer_api:app", "--host", "0.0.0.0", "--port", str(API_PORT)],
@@ -209,7 +201,7 @@ def main():
     )
     procs.append(api)
 
-    print("Starting consumer worker (this plays the audio)...")
+    print("Starting player (this plays the audio)...")
     worker = subprocess.Popen(
         [sys.executable, "consumer_worker.py"],
         cwd=HERE, stdout=log_fh, stderr=subprocess.STDOUT,
