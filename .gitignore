@@ -23,5 +23,6 @@ uttarayan.db-shm
 .history.json
 .app.log
 .app.pid
+.volume
 # Added by code-review-graph
 .code-review-graph/
