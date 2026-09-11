@@ -75,74 +75,10 @@ function renderSearchResults(results) {
 }
 
 async function enqueueFromSearch(song, btn) {
-  btn.disabled = true;
-  btn.textContent = 'Adding...';
-
-  const dedicationName = document.getElementById('dedication-name').value.trim() || undefined;
-  const dedication = document.getElementById('dedication').value.trim() || undefined;
-
-  try {
-    const res = await fetch('/enqueue', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-      body: JSON.stringify({
-        urls: [song.url],
-        dedication,
-        dedication_name: dedicationName,
-      }),
-    });
-    const data = await res.json();
-
-    if (!res.ok) {
-      showToast(formatError(data), 'error', 5000);
-      btn.textContent = 'Failed';
-      setTimeout(() => { btn.textContent = 'Enqueue'; btn.disabled = false; }, 2000);
-      return;
-    }
-
-    if (data.enqueued && data.enqueued.length > 0) {
-      const s = data.enqueued[0];
-      btn.textContent = `#${s.position_in_queue}`;
-      btn.style.background = '#2e7d32';
-      showToast(
-        `${s.title || song.title || 'Song'} queued! Position #${s.position_in_queue}, wait ${s.estimated_wait}`,
-        'success', 4000
-      );
-
-      document.getElementById('dedication-name').value = '';
-      document.getElementById('dedication').value = '';
-      document.getElementById('search-query').value = '';
-      searchResults.innerHTML = '';
-
-      if (s.id) {
-        try {
-          const tracked = JSON.parse(sessionStorage.getItem('_enqueued_song_ids') || '[]');
-          tracked.push(s.id);
-          sessionStorage.setItem('_enqueued_song_ids', JSON.stringify(tracked));
-        } catch (_) {}
-        if ('Notification' in window && Notification.permission === 'default') {
-          Notification.requestPermission();
-        }
-      }
-
-      loadQueue();
-      loadWaitTime();
-      loadNowPlaying();
-    } else if (data.rejected && data.rejected.length > 0) {
-      const reason = data.rejected[0].reason || 'Rejected.';
-      showToast(reason, 'error', 5000);
-      btn.textContent = 'Rejected';
-      btn.title = reason;
-      setTimeout(() => { btn.textContent = 'Enqueue'; btn.title = ''; btn.disabled = false; }, 3000);
-    }
-  } catch (err) {
-    // A SyntaxError here means the body wasn't JSON — almost always a dead
-    // or restarting server answering with an empty/HTML page.
-    const msg = err instanceof SyntaxError
-      ? 'Could not reach the server — is it running?'
-      : 'Request failed: ' + err.message;
-    showToast(msg, 'error', 5000);
-    btn.textContent = 'Error';
-    setTimeout(() => { btn.textContent = 'Enqueue'; btn.disabled = false; }, 2000);
+  // Shared path: dedication dialog (when enabled), POST, toast, tracking.
+  const s = await quickEnqueue(song, btn);
+  if (s) {
+    document.getElementById('search-query').value = '';
+    searchResults.innerHTML = '';
   }
 }
