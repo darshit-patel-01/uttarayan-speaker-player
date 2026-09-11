@@ -79,7 +79,8 @@ button.secondary { background: var(--kite-purple); }
   font-weight: 600;
   line-height: 1.4;
   box-shadow: 0 6px 24px rgba(0,0,0,0.18);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   opacity: 0;
   animation: toastIn 0.4s ease forwards;
   display: flex;

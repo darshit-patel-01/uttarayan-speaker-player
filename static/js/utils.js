@@ -31,11 +31,23 @@ function showToast(message, type = 'success', duration = 3000) {
   toast.innerHTML =
     `<span class="toast-kites" aria-hidden="true"><span class="tk tk-a">\u{1FA81}</span><span class="tk tk-b">\u{1FA81}</span></span>` +
     `<span style="font-size:1.3rem">${icon}</span><span>${message}</span>`;
+  toast.title = 'Click to dismiss';
   document.body.appendChild(toast);
-  setTimeout(() => {
+
+  let dismissed = false;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    clearTimeout(timer);
     toast.classList.add('out');
-    toast.addEventListener('animationend', () => toast.remove());
-  }, duration);
+    // Child kite/shout animations also fire animationend and bubble up —
+    // only the toast's own exit animation should trigger removal.
+    toast.addEventListener('animationend', (e) => {
+      if (e.target === toast && e.animationName === 'toastOut') toast.remove();
+    });
+  };
+  const timer = setTimeout(dismiss, duration);
+  toast.addEventListener('click', dismiss);
 }
 
 function formatError(data) {
