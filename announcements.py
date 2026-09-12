@@ -111,22 +111,62 @@ def _pop_next() -> Optional[dict]:
 
 
 def _ffplay(path: str, timeout: float = CLIP_TIMEOUT_SECONDS) -> None:
-    # loudnorm so a quiet voice note still cuts through a bar system.
-    subprocess.run(
-        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
-         "-af", "loudnorm=I=-14:TP=-1.0:LRA=7", path],
-        timeout=timeout,
+    # Plain playback, no filters: ffplay's -autoexit stops at end-of-input
+    # without draining a lookahead filter like loudnorm, which silently cuts
+    # most of the audio. Anything needing normalisation is pre-processed to a
+    # file by _normalize_clip() first.
+    started = time.time()
+    result = subprocess.run(
+        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", path],
+        capture_output=True, text=True, timeout=timeout,
     )
+    if result.returncode != 0:
+        logger.warning(
+            "ffplay exited %s after %.1fs for %s: %s",
+            result.returncode, time.time() - started, path, result.stderr.strip()[:200],
+        )
+
+
+def _normalize_clip(path: str) -> str:
+    """
+    Loudness-normalises a voice clip into a temp WAV so a quiet phone
+    recording still carries through a bar system. Done with ffmpeg to a
+    file — unlike ffplay, it drains the filter fully. Returns the original
+    path if ffmpeg is missing or fails, so the clip still plays.
+    """
+    out = path + ".norm.wav"
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", path,
+             "-af", "loudnorm=I=-14:TP=-1.0:LRA=7", "-ar", "48000", out],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0 and os.path.exists(out):
+            return out
+        logger.warning("Clip normalisation failed (%s); playing unnormalised", result.stderr.strip()[:200])
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Clip normalisation unavailable (%s); playing unnormalised", exc)
+    return path
+
+
+VOICES = {"hi": "hi-IN-SwaraNeural", "en": "en-IN-NeerjaNeural"}
+LEAD_IN = {"hi": "एडमिन की घोषणा।", "en": "Admin announcement."}
+
+
+def _language() -> str:
+    """The admin-announcement language — its own setting, independent of the
+    song-intro language, so the two can differ."""
+    import runtime_config
+    lang = runtime_config.get("announcement_language") or "hi"
+    return lang if lang in VOICES else "hi"
 
 
 def _speak(text: str) -> None:
-    """TTS a line using the same voice settings as song announcements."""
+    """TTS a line in the announcement language."""
     import asyncio
     import edge_tts
-    import runtime_config
 
-    lang = runtime_config.get("tts_language") or "hi"
-    voice = "en-IN-NeerjaNeural" if lang == "en" else "hi-IN-SwaraNeural"
+    voice = VOICES[_language()]
     tmp = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
@@ -147,28 +187,31 @@ def play_all_pending() -> int:
     lead-in, then the clip or the text. Blocks until done. Returns how many
     were played. Failures in one announcement never block the next.
     """
-    import runtime_config
-
     played = 0
     while True:
         meta = _pop_next()
         if meta is None:
             return played
+        normalized = None
+        started = time.time()
         try:
-            lang = runtime_config.get("tts_language") or "hi"
-            _speak("एडमिन की घोषणा।" if lang != "en" else "Admin announcement.")
+            _speak(LEAD_IN[_language()])
             if meta["kind"] == "clip":
-                _ffplay(meta["audio"])
+                normalized = _normalize_clip(meta["audio"])
+                _ffplay(normalized)
             else:
                 _speak(meta["text"])
             played += 1
-            logger.info("Played announcement %s (%s) from %s", meta["id"], meta["kind"], meta.get("sender"))
+            logger.info(
+                "Played announcement %s (%s) from %s in %.1fs",
+                meta["id"], meta["kind"], meta.get("sender"), time.time() - started,
+            )
         except Exception:
             logger.exception("Announcement %s failed", meta.get("id"))
         finally:
-            audio = meta.get("audio")
-            if audio:
-                try:
-                    os.unlink(audio)
-                except OSError:
-                    pass
+            for path in (meta.get("audio"), normalized if normalized != meta.get("audio") else None):
+                if path:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass

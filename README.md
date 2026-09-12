@@ -165,7 +165,8 @@ every override.
 | Crossfade lead | 8 s | How early the next announcement starts before the current song ends |
 | Song dedications | on | Show the dedication fields and read dedications aloud; when off the UI hides them and any sent are dropped |
 | Song announcements | on | Speak a TTS intro before each song; off plays songs back-to-back with no voice (dedications aren't read out either) |
-| TTS language | Hindi | Hindi or English announcements |
+| TTS language | Hindi | Hindi or English song intros |
+| Admin announcement language | Hindi | Language for the "Admin announcement" lead-in and spoken `!say` messages — independent of the song-intro language |
 | Share public (Tailscale) link | on | Use the Funnel URL in the Web QR whenever the funnel is up |
 
 ## Adding songs via WhatsApp
@@ -202,8 +203,10 @@ From any number in `ADMIN_PHONE_NUMBERS`, the bridge turns two kinds of
 message into a PA announcement that cuts into the music:
 
 - **A voice note** — send one and it's played through the speakers as-is.
-- **`!say <text>`** (or `!announce`) — spoken via TTS in the configured
-  language, e.g. `!say Kitchen closes in ten minutes`.
+- **`!say <text>`** (or `!announce`) — spoken via TTS, e.g.
+  `!say Kitchen closes in ten minutes`. The voice follows the **Admin
+  announcement language** setting (Hindi or English), which is separate
+  from the song-intro language.
 
 Either way the player pauses the current song, says *"Admin announcement"*,
 plays yours, and resumes the song exactly where it stopped. If nothing is
@@ -535,7 +538,8 @@ falls back to.
 | `PLAYLIST_MODE` | `false` | Reject all guest requests; only the active playlist plays |
 | `DEDICATIONS_ENABLED` | `true` | Let requesters attach a dedication, announced via TTS |
 | `ANNOUNCEMENTS_ENABLED` | `true` | Speak a TTS announcement before each song |
-| `TTS_LANGUAGE` | `hi` | `hi` (Hindi) or `en` (English) announcements |
+| `TTS_LANGUAGE` | `hi` | `hi` (Hindi) or `en` (English) song intros |
+| `ANNOUNCEMENT_LANGUAGE` | `hi` | Language for admin announcements (`hi` / `en`) |
 | `NORMALIZE_VOLUME` | `true` | Apply mpv's `loudnorm` filter to every song |
 | `LOUDNORM_TARGET_LUFS` | `-16` | Target loudness (LUFS) for normalization |
 | `CROSSFADE_LEAD_SECONDS` | `8` | How early into a song's tail the next announcement starts |

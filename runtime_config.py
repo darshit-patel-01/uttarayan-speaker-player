@@ -87,6 +87,13 @@ SPEC: dict = {
         "label": "TTS language",
         "help": "Language for song announcements — Hindi or English.",
     },
+    "announcement_language": {
+        "type": "choice",
+        "choices": ["hi", "en"],
+        "labels": {"hi": "Hindi", "en": "English"},
+        "label": "Admin announcement language",
+        "help": "Language for the \"Admin announcement\" lead-in and for spoken !say messages from WhatsApp. Independent of the song-intro language.",
+    },
 }
 
 

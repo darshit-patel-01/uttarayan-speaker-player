@@ -46,6 +46,7 @@ class Settings:
     # of playing into dead silence first. See consumer_worker._announce_upcoming.
     crossfade_lead_seconds: float = float(os.getenv("CROSSFADE_LEAD_SECONDS", "8"))
     announcements_enabled: bool = os.getenv("ANNOUNCEMENTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    announcement_language: str = os.getenv("ANNOUNCEMENT_LANGUAGE", "hi")
     dedications_enabled: bool = os.getenv("DEDICATIONS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     tts_language: str = os.getenv("TTS_LANGUAGE", "hi")
     stuck_timeout_seconds: int = int(os.getenv("STUCK_TIMEOUT_SECONDS", "120"))

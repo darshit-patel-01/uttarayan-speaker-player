@@ -84,6 +84,34 @@ def test_play_all_speaks_leadin_then_content_and_cleans_up():
     assert announcements.pending() is False
 
 
+def test_announcement_language_is_its_own_setting():
+    """Song intros can be Hindi while admin announcements are English (or
+    vice versa) — the lead-in and the voice follow announcement_language,
+    not tts_language."""
+    import runtime_config
+    runtime_config.update({"tts_language": "hi", "announcement_language": "en"})
+    try:
+        announcements.enqueue_text("last orders", sender="a")
+        spoken = []
+        with patch.object(announcements, "_speak", lambda t: spoken.append(t)):
+            announcements.play_all_pending()
+        assert spoken == ["Admin announcement.", "last orders"]
+        assert announcements._language() == "en"
+        assert announcements.VOICES[announcements._language()].startswith("en-")
+    finally:
+        runtime_config.reset()
+
+
+def test_unknown_announcement_language_falls_back_to_hindi():
+    import runtime_config
+    runtime_config.update({"announcement_language": "hi"})   # valid; then poke an invalid value straight in
+    try:
+        with patch.object(runtime_config, "get", lambda k: "xx" if k == "announcement_language" else None):
+            assert announcements._language() == "hi"
+    finally:
+        runtime_config.reset()
+
+
 def test_a_failing_announcement_does_not_block_the_next():
     announcements.enqueue_text("bad", sender="a")
     announcements.enqueue_text("good", sender="a")
