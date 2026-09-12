@@ -262,13 +262,20 @@ def peek_next_song() -> Optional[dict]:
 
 
 def set_now_playing(song: dict) -> None:
+    """
+    Registers the upcoming playlist song so the UI can show it during its
+    TTS announcement and download. It starts in the "announcing" state with
+    no clock running; mark_now_playing_started() flips it to "playing" once
+    audio actually begins. Mirrors queue_state's downloading -> playing.
+    """
     now_playing = {
         "id": song["id"],
         "url": song["url"],
         "title": song.get("title"),
         "uploader": song.get("uploader"),
         "duration": song.get("duration"),
-        "started_at": time.time(),
+        "status": "announcing",
+        "started_at": None,
         "seek_offset": 0,
         "paused_duration": 0,
         "paused_at": None,
@@ -279,6 +286,23 @@ def set_now_playing(song: dict) -> None:
         "VALUES ('default_playlist_now_playing', ?)",
         (json.dumps(now_playing),),
     )
+
+
+def mark_now_playing_started() -> None:
+    """Audio is actually coming out of the speakers now — start the clock from zero."""
+    with db.transaction() as conn:
+        np = _get_now_playing_data(conn)
+        if np:
+            np["status"] = "playing"
+            np["started_at"] = time.time()
+            np["seek_offset"] = 0
+            np["paused_duration"] = 0
+            np["paused_at"] = None
+            conn.execute(
+                "UPDATE app_state SET value=? "
+                "WHERE key='default_playlist_now_playing'",
+                (json.dumps(np),),
+            )
 
 
 def _get_now_playing_data(conn) -> Optional[dict]:

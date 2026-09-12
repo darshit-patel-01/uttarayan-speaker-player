@@ -202,6 +202,7 @@ def _play_default_song():
             on_pause=default_playlist.mark_now_playing_paused,
             on_resume=default_playlist.mark_now_playing_resumed,
             on_seek=default_playlist.mark_now_playing_seeked,
+            on_playback_start=default_playlist.mark_now_playing_started,
         )
         if finished:
             logger.info("Finished default playlist song: %s", song["url"])

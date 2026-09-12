@@ -260,8 +260,12 @@ def _song_summary(song: dict, source: str, progress: Optional[dict] = None) -> d
 
 def _default_playlist_progress(np: dict) -> dict:
     """Compute elapsed/duration/is_paused from a default-playlist now_playing entry."""
+    if np.get("status") == "announcing" or not np.get("started_at"):
+        # TTS / download in progress: the song is on screen but no audio yet.
+        return {"elapsed_seconds": 0.0, "duration_seconds": np.get("duration"), "is_paused": False}
+
     seek_offset = np.get("seek_offset") or 0
-    started_at = np.get("started_at") or _time.time()
+    started_at = np["started_at"]
     paused_duration = np.get("paused_duration") or 0
     paused_at = np.get("paused_at")
     duration = np.get("duration")
