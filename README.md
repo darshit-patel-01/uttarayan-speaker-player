@@ -164,6 +164,7 @@ every override.
 | Loudness target | −16 LUFS | Target for normalization |
 | Crossfade lead | 8 s | How early the next announcement starts before the current song ends |
 | Song dedications | on | Show the dedication fields and read dedications aloud; when off the UI hides them and any sent are dropped |
+| Song announcements | on | Speak a TTS intro before each song; off plays songs back-to-back with no voice (dedications aren't read out either) |
 | TTS language | Hindi | Hindi or English announcements |
 | Share public (Tailscale) link | on | Use the Funnel URL in the Web QR whenever the funnel is up |
 
@@ -511,6 +512,7 @@ falls back to.
 | `STUCK_TIMEOUT_SECONDS` | `120` | Auto-skip a song whose download + playback hasn't started in time |
 | `PLAYLIST_MODE` | `false` | Reject all guest requests; only the active playlist plays |
 | `DEDICATIONS_ENABLED` | `true` | Let requesters attach a dedication, announced via TTS |
+| `ANNOUNCEMENTS_ENABLED` | `true` | Speak a TTS announcement before each song |
 | `TTS_LANGUAGE` | `hi` | `hi` (Hindi) or `en` (English) announcements |
 | `NORMALIZE_VOLUME` | `true` | Apply mpv's `loudnorm` filter to every song |
 | `LOUDNORM_TARGET_LUFS` | `-16` | Target loudness (LUFS) for normalization |

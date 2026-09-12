@@ -50,6 +50,11 @@ SPEC: dict = {
         "label": "Crossfade lead",
         "help": "How early the next song's announcement starts before the current one ends.",
     },
+    "announcements_enabled": {
+        "type": "bool",
+        "label": "Song announcements",
+        "help": "Speak a TTS announcement before each song (\"अगला गाना है…\"). Off means songs play back-to-back with no voice; dedications are not read out either.",
+    },
     "dedications_enabled": {
         "type": "bool",
         "label": "Song dedications",

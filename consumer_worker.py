@@ -75,9 +75,17 @@ logger = logging.getLogger("consumer_worker")
 # rate="+25%" and pitch="+8Hz" give it an upbeat, energetic feel.
 # ---------------------------------------------------------------------------
 def _tts_announce(title: str, dedication: str = None, dedication_name: str = None, from_playlist: bool = False) -> None:
+    import runtime_config
+
+    # Every announcement path (pre-play, playlist, crossfade thread) lands
+    # here, so this one check is the whole on/off switch. Read per call so an
+    # admin toggle applies to the next song with no restart.
+    if not runtime_config.get("announcements_enabled"):
+        logger.info("Announcements are off — skipping TTS for: %s", title)
+        return
+
     import asyncio
     import edge_tts
-    import runtime_config
 
     async def _generate(path: str) -> None:
         lang = runtime_config.get("tts_language") or "hi"
