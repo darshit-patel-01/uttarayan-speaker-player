@@ -142,6 +142,7 @@
     <button type="button" class="tab-btn admin-only" id="tab-btn-playlists" data-tab="playlists" title="Manage Playlist">🎶 Playlist</button>
     <button type="button" class="tab-btn admin-only" id="tab-btn-blacklist" data-tab="blacklist" title="Blacklist">🚫 Blacklist</button>
     <button type="button" class="tab-btn admin-only" id="tab-btn-messages" data-tab="messages" title="Messages">💬 Messages <span id="messages-badge" style="display:none; background:#c62828; color:white; font-size:0.7rem; padding:1px 6px; border-radius:10px; margin-left:4px; font-weight:700;"></span></button>
+    <button type="button" class="tab-btn admin-only" id="tab-btn-announce" data-tab="announce" title="Announce">📢 Announce</button>
     <button type="button" class="tab-btn admin-only" id="tab-btn-settings" data-tab="settings" title="Settings">⚙️ Settings</button>
   </nav>
 
@@ -382,6 +383,47 @@
     </div>
   </div>
 
+  <div class="tab-panel" data-tab="announce">
+    <div id="announce-section">
+      <h1>Announce</h1>
+      <p style="color:#888; font-size:0.85rem; margin-top:-16px;">
+        Cuts into the music: the song pauses, "Admin announcement" is spoken, your message plays, and the song resumes where it stopped.
+      </p>
+
+      <div class="announce-card">
+        <h2 style="margin:0 0 10px; font-size:1rem;">✍️ Type a message</h2>
+        <form id="announce-text-form">
+          <textarea id="announce-text" rows="3" maxlength="300" placeholder="e.g. Kitchen closes in ten minutes" style="flex:1 1 100%; padding:10px 12px; font-size:1rem; border:1px solid #ccc; border-radius:6px; font-family:inherit; resize:vertical;"></textarea>
+          <div class="announce-row">
+            <span id="announce-text-count" style="font-size:0.78rem; color:#888;">0 / 300</span>
+            <label class="announce-repeat">Play <select id="announce-text-repeat"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select> time(s)</label>
+            <button type="submit" id="announce-text-btn">📢 Announce</button>
+          </div>
+        </form>
+        <p style="font-size:0.78rem; color:#888; margin:8px 0 0;">Spoken in the <strong>Admin announcement language</strong> from Settings.</p>
+      </div>
+
+      <div class="announce-card">
+        <h2 style="margin:0 0 10px; font-size:1rem;">🎙️ Record a message</h2>
+        <div class="announce-row" id="announce-rec-controls">
+          <button type="button" id="announce-rec-btn">● Start recording</button>
+          <span id="announce-rec-status" style="font-size:0.85rem; color:#666;">Uses your microphone. Max 2 minutes.</span>
+        </div>
+        <div id="announce-rec-preview" style="display:none; margin-top:12px;">
+          <audio id="announce-rec-audio" controls style="width:100%;"></audio>
+          <div class="announce-row" style="margin-top:10px;">
+            <button type="button" id="announce-rec-discard" class="secondary small">Discard</button>
+            <label class="announce-repeat">Play <select id="announce-rec-repeat"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select> time(s)</label>
+            <button type="button" id="announce-rec-send">📢 Announce recording</button>
+          </div>
+        </div>
+        <p id="announce-rec-unsupported" style="display:none; font-size:0.85rem; color:#b71c1c; margin:8px 0 0;">
+          Recording needs a secure page (https or localhost) and a browser with microphone support.
+        </p>
+      </div>
+    </div>
+  </div>
+
   <div class="tab-panel" data-tab="settings">
     <div id="settings-section">
       <h1>Settings</h1>
@@ -491,6 +533,7 @@
 <script src="js/messages.js"></script>
 <script src="js/dashboard.js"></script>
 <script src="js/settings.js"></script>
+<script src="js/announce.js"></script>
 <script src="js/search.js"></script>
 <script src="js/enqueue.js"></script>
 <script src="js/history.js"></script>

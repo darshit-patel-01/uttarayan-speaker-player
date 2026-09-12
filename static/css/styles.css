@@ -534,6 +534,29 @@ dialog form { flex-direction: column; }
 }
 .kite-decor svg { position: absolute; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15)); }
 
+.announce-card {
+  background: #fff;
+  border: 1px solid #e3e3e3;
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.announce-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.announce-row button[type="submit"], #announce-rec-send { margin-left: auto; }
+.announce-repeat { font-size: 0.85rem; color: #555; display: inline-flex; align-items: center; gap: 6px; }
+.announce-repeat select { padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
+#announce-rec-btn.recording {
+  background: #c62828;
+  animation: recPulse 1.2s ease-in-out infinite;
+}
+@keyframes recPulse { 50% { opacity: 0.7; } }
+#announce-text-form { flex-wrap: wrap; }
 .enqueue-divider {
   display: flex;
   align-items: center;

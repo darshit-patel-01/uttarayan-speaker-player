@@ -99,6 +99,7 @@ Open `http://localhost:8000` in a browser. Tabs:
 | Playlist | Admin | Create/edit fallback playlists and choose the active one |
 | Blacklist | Admin | Block videos or requesters; one-click block from the recent-requesters list |
 | Messages | Admin | Appeals from blocked users, with replies delivered back over WhatsApp/Telegram |
+| Announce | Admin | Type a message or record one with the mic; it cuts into the music, plays (optionally ×N), and the song resumes — see [Admin announcements](#admin-announcements) |
 | Settings | Admin | Live tuning of limits, TTS, dedications, playlist mode, sharing — see [Admin settings](#admin-settings-live) |
 
 Every song title in History, Dashboard and Playlist has an **Enqueue** button
@@ -218,6 +219,11 @@ plays yours, and resumes the song exactly where it stopped. If nothing is
 playing it plays straight away. Several sent in a row play in order. The
 bridge replies "📢 Announcing now" so you know it landed. Non-admins who
 send a voice note get a short "not supported" reply.
+
+**From the web UI:** the **Announce** tab (admin) does the same without
+WhatsApp — type a message, or press record and speak into the browser's
+microphone, listen back, pick how many times to play it, and send.
+Recording needs https or localhost (browser rule for mic access).
 
 Voice notes are normalised for loudness so a quiet one still carries, but
 they're compressed mono — fine for announcements, don't expect music

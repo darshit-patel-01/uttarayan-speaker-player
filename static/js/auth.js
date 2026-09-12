@@ -21,6 +21,7 @@ function setLoggedIn(username) {
   document.getElementById('tab-btn-playlists').classList.remove('admin-only');
   document.getElementById('tab-btn-blacklist').classList.remove('admin-only');
   document.getElementById('tab-btn-messages').classList.remove('admin-only');
+  document.getElementById('tab-btn-announce').classList.remove('admin-only');
   document.getElementById('tab-btn-settings').classList.remove('admin-only');
   profileWidget.classList.add('logged-in');
   profileIconText.textContent = username.charAt(0).toUpperCase();
@@ -43,18 +44,21 @@ function setLoggedOut() {
   const playlistsTabBtn = document.getElementById('tab-btn-playlists');
   const blacklistTabBtn = document.getElementById('tab-btn-blacklist');
   const messagesTabBtn = document.getElementById('tab-btn-messages');
+  const announceTabBtn = document.getElementById('tab-btn-announce');
   const settingsTabBtn = document.getElementById('tab-btn-settings');
   const wasOnAdminTab = dashboardTabBtn.classList.contains('active')
     || queueTabBtn.classList.contains('active')
     || playlistsTabBtn.classList.contains('active')
     || blacklistTabBtn.classList.contains('active')
     || messagesTabBtn.classList.contains('active')
+    || announceTabBtn.classList.contains('active')
     || settingsTabBtn.classList.contains('active');
   dashboardTabBtn.classList.add('admin-only');
   queueTabBtn.classList.add('admin-only');
   playlistsTabBtn.classList.add('admin-only');
   blacklistTabBtn.classList.add('admin-only');
   messagesTabBtn.classList.add('admin-only');
+  announceTabBtn.classList.add('admin-only');
   settingsTabBtn.classList.add('admin-only');
   if (wasOnAdminTab) switchTab('enqueue');
   profileWidget.classList.remove('logged-in');
