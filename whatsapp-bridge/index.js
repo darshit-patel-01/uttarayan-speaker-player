@@ -322,7 +322,19 @@ function adminAuthHeader() {
   return `Basic ${Buffer.from(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`).toString("base64")}`;
 }
 
-async function announceClip(sock, msg, audio) {
+const MAX_REPEAT = 5;
+
+// "repeat 3 kitchen closing" -> { repeat: 3, rest: "kitchen closing" }.
+// Also accepts "x3" / "3x". Anything else -> repeat 1, text untouched.
+// Clamped to 1..MAX_REPEAT so a typo can't loop the PA for minutes.
+function parseRepeat(text) {
+  const m = (text || "").match(/^\s*(?:repeat\s+(\d+)|x(\d+)|(\d+)x)\s*(?:[:\-–—]\s*)?([\s\S]*)$/i);
+  if (!m) return { repeat: 1, rest: (text || "").trim() };
+  const n = parseInt(m[1] || m[2] || m[3], 10);
+  return { repeat: Math.max(1, Math.min(n, MAX_REPEAT)), rest: (m[4] || "").trim() };
+}
+
+async function announceClip(sock, msg, audio, repeat = 1) {
   const auth = adminAuthHeader();
   if (!auth) return { ok: false, error: "ADMIN_USERNAME/ADMIN_PASSWORD not set in bridge .env" };
   // WhatsApp voice notes are OGG/Opus; audio files keep their own mimetype.
@@ -330,7 +342,7 @@ async function announceClip(sock, msg, audio) {
   const buf = await downloadMediaMessage(msg, "buffer", {}, { logger: pino({ level: "silent" }), reuploadRequest: sock.updateMediaMessage });
   const res = await fetch(`${BASE_URL}/announce`, {
     method: "POST",
-    headers: { "Content-Type": mime, Authorization: auth },
+    headers: { "Content-Type": mime, Authorization: auth, "X-Repeat": String(repeat) },
     body: buf,
   });
   if (!res.ok) return { ok: false, error: await describeError(res) };
@@ -338,13 +350,13 @@ async function announceClip(sock, msg, audio) {
   return { ok: true, kind: data.kind };
 }
 
-async function announceText(text) {
+async function announceText(text, repeat = 1) {
   const auth = adminAuthHeader();
   if (!auth) return { ok: false, error: "ADMIN_USERNAME/ADMIN_PASSWORD not set in bridge .env" };
   const res = await fetch(`${BASE_URL}/announce`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: auth },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, repeat }),
   });
   if (!res.ok) return { ok: false, error: await describeError(res) };
   const data = await res.json();
@@ -509,14 +521,22 @@ async function start() {
           }
         } else {
           try {
+            // "!say repeat 3 <msg>" / voice-note caption "repeat 3" -> play N times.
+            const body = audio ? (audio.caption || "") : sayMatch[1].trim();
+            const { repeat, rest } = parseRepeat(body);
+            if (!audio && !rest) {
+              await sock.sendMessage(jid, { text: "Usage: !say <message>  or  !say repeat 3 <message>" });
+              continue;
+            }
             const res = audio
-              ? await announceClip(sock, msg, audio)
-              : await announceText(sayMatch[1].trim());
+              ? await announceClip(sock, msg, audio, repeat)
+              : await announceText(rest, repeat);
+            const times = repeat > 1 ? ` ×${repeat}` : "";
             const reply = res.ok
-              ? `📢 Announcing now${res.kind === "clip" ? " (voice note)" : ""}.`
+              ? `📢 Announcing now${res.kind === "clip" ? " (voice note)" : ""}${times}.`
               : `❌ Couldn't announce: ${res.error}`;
             await sock.sendMessage(jid, { text: reply });
-            await logLine(`ANNOUNCE phone=${number} kind=${audio ? "clip" : "text"} ok=${res.ok}${res.error ? ` error="${res.error}"` : ""}`);
+            await logLine(`ANNOUNCE phone=${number} kind=${audio ? "clip" : "text"} repeat=${repeat} ok=${res.ok}${res.error ? ` error="${res.error}"` : ""}`);
           } catch (err) {
             await sock.sendMessage(jid, { text: `❌ Couldn't announce: ${err.message}` });
             await logLine(`ANNOUNCE_ERROR phone=${number} error="${err.message}"`);

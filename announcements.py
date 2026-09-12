@@ -33,6 +33,7 @@ ALLOWED_TYPES = {
     "audio/aac", "audio/wav", "audio/x-wav", "audio/webm",
 }
 MAX_TEXT_CHARS = 300
+MAX_REPEAT = 5
 CLIP_TIMEOUT_SECONDS = 120
 
 # Ids sort in arrival order even when two announcements land in the same
@@ -48,7 +49,14 @@ def _new_id() -> str:
     return f"{int(time.time() * 1000):015d}-{next(_seq):06d}"
 
 
-def enqueue_clip(data: bytes, content_type: str, sender: str) -> str:
+def _clamp_repeat(repeat: int) -> int:
+    try:
+        return max(1, min(int(repeat), MAX_REPEAT))
+    except (TypeError, ValueError):
+        return 1
+
+
+def enqueue_clip(data: bytes, content_type: str, sender: str, repeat: int = 1) -> str:
     """Spools an audio clip. Returns the announcement id."""
     _ensure_dir()
     aid = _new_id()
@@ -59,17 +67,21 @@ def enqueue_clip(data: bytes, content_type: str, sender: str) -> str:
     audio_path = os.path.join(SPOOL_DIR, aid + ext)
     with open(audio_path, "wb") as f:
         f.write(data)
-    _write_sidecar(aid, {"id": aid, "kind": "clip", "audio": audio_path, "sender": sender, "created_at": time.time()})
-    logger.info("Spooled announcement clip %s (%d bytes) from %s", aid, len(data), sender)
+    repeat = _clamp_repeat(repeat)
+    _write_sidecar(aid, {"id": aid, "kind": "clip", "audio": audio_path, "sender": sender,
+                         "repeat": repeat, "created_at": time.time()})
+    logger.info("Spooled announcement clip %s (%d bytes, x%d) from %s", aid, len(data), repeat, sender)
     return aid
 
 
-def enqueue_text(text: str, sender: str) -> str:
+def enqueue_text(text: str, sender: str, repeat: int = 1) -> str:
     """Spools a text announcement to be spoken via TTS. Returns the announcement id."""
     _ensure_dir()
     aid = _new_id()
-    _write_sidecar(aid, {"id": aid, "kind": "text", "text": text, "sender": sender, "created_at": time.time()})
-    logger.info("Spooled text announcement %s from %s: %r", aid, sender, text[:60])
+    repeat = _clamp_repeat(repeat)
+    _write_sidecar(aid, {"id": aid, "kind": "text", "text": text, "sender": sender,
+                         "repeat": repeat, "created_at": time.time()})
+    logger.info("Spooled text announcement %s (x%d) from %s: %r", aid, repeat, sender, text[:60])
     return aid
 
 
@@ -194,17 +206,22 @@ def play_all_pending() -> int:
             return played
         normalized = None
         started = time.time()
+        repeat = _clamp_repeat(meta.get("repeat", 1))
         try:
+            # One lead-in, then the message `repeat` times. For a clip, the
+            # normalisation pre-pass runs once and the result is replayed.
             _speak(LEAD_IN[_language()])
             if meta["kind"] == "clip":
                 normalized = _normalize_clip(meta["audio"])
-                _ffplay(normalized)
+                for _ in range(repeat):
+                    _ffplay(normalized)
             else:
-                _speak(meta["text"])
+                for _ in range(repeat):
+                    _speak(meta["text"])
             played += 1
             logger.info(
-                "Played announcement %s (%s) from %s in %.1fs",
-                meta["id"], meta["kind"], meta.get("sender"), time.time() - started,
+                "Played announcement %s (%s, x%d) from %s in %.1fs",
+                meta["id"], meta["kind"], repeat, meta.get("sender"), time.time() - started,
             )
         except Exception:
             logger.exception("Announcement %s failed", meta.get("id"))

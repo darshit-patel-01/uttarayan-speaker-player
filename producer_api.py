@@ -1072,6 +1072,7 @@ def _format_views(count: int) -> str:
 # ---------------------------------------------------------------------------
 class TextAnnouncementRequest(BaseModel):
     text: str
+    repeat: int = 1
 
     @field_validator("text")
     @classmethod
@@ -1083,18 +1084,40 @@ class TextAnnouncementRequest(BaseModel):
             raise ValueError(f"text must be at most {announcements.MAX_TEXT_CHARS} characters")
         return v
 
+    @field_validator("repeat")
+    @classmethod
+    def clamp_repeat(cls, v: int) -> int:
+        if v < 1 or v > announcements.MAX_REPEAT:
+            raise ValueError(f"repeat must be between 1 and {announcements.MAX_REPEAT}")
+        return v
+
+
+def _repeat_from_header(request: Request) -> int:
+    """For audio bodies the count travels in X-Repeat (no JSON to put it in)."""
+    raw = request.headers.get("x-repeat")
+    if raw is None:
+        return 1
+    try:
+        n = int(raw)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="X-Repeat must be an integer")
+    if n < 1 or n > announcements.MAX_REPEAT:
+        raise HTTPException(status_code=422, detail=f"X-Repeat must be between 1 and {announcements.MAX_REPEAT}")
+    return n
+
 
 @app.post("/announce")
 async def announce(request: Request, admin: str = Depends(require_admin)):
     """
     Queues an admin announcement. Two forms, picked by Content-Type:
 
-      application/json  {"text": "..."}   -> spoken via TTS
-      audio/*           <raw clip bytes>  -> played as-is (WhatsApp voice note etc.)
+      application/json  {"text": "...", "repeat": N}  -> spoken via TTS
+      audio/*           <raw clip bytes> + X-Repeat: N -> played as-is
 
-    The player pauses the current song, says "Admin announcement", plays
-    this, then resumes the song where it left off. Between songs it plays
-    immediately. Announcements queue in arrival order.
+    `repeat` (default 1, max 5) plays the message that many times after a
+    single "Admin announcement" lead-in. The player pauses the current
+    song, plays this, then resumes the song where it left off. Between
+    songs it plays immediately. Announcements queue in arrival order.
     """
     ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
 
@@ -1103,11 +1126,12 @@ async def announce(request: Request, admin: str = Depends(require_admin)):
             req = TextAnnouncementRequest(**(await request.json()))
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        aid = announcements.enqueue_text(req.text, sender=admin)
-        logger.info("Text announcement %s queued by %s", aid, admin)
-        return {"status": "queued", "id": aid, "kind": "text"}
+        aid = announcements.enqueue_text(req.text, sender=admin, repeat=req.repeat)
+        logger.info("Text announcement %s (x%d) queued by %s", aid, req.repeat, admin)
+        return {"status": "queued", "id": aid, "kind": "text", "repeat": req.repeat}
 
     if ctype in announcements.ALLOWED_TYPES:
+        repeat = _repeat_from_header(request)
         length = request.headers.get("content-length")
         if length and int(length) > announcements.MAX_CLIP_BYTES:
             raise HTTPException(status_code=413, detail=f"Clip too large (max {announcements.MAX_CLIP_BYTES // (1024*1024)} MB)")
@@ -1116,9 +1140,9 @@ async def announce(request: Request, admin: str = Depends(require_admin)):
             raise HTTPException(status_code=422, detail="Empty audio body")
         if len(data) > announcements.MAX_CLIP_BYTES:
             raise HTTPException(status_code=413, detail=f"Clip too large (max {announcements.MAX_CLIP_BYTES // (1024*1024)} MB)")
-        aid = announcements.enqueue_clip(data, ctype, sender=admin)
-        logger.info("Audio announcement %s (%d bytes, %s) queued by %s", aid, len(data), ctype, admin)
-        return {"status": "queued", "id": aid, "kind": "clip"}
+        aid = announcements.enqueue_clip(data, ctype, sender=admin, repeat=repeat)
+        logger.info("Audio announcement %s (%d bytes, %s, x%d) queued by %s", aid, len(data), ctype, repeat, admin)
+        return {"status": "queued", "id": aid, "kind": "clip", "repeat": repeat}
 
     raise HTTPException(
         status_code=415,

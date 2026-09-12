@@ -112,6 +112,61 @@ def test_unknown_announcement_language_falls_back_to_hindi():
         runtime_config.reset()
 
 
+def test_repeat_plays_message_n_times_after_one_leadin():
+    announcements.enqueue_text("last orders", sender="a", repeat=3)
+    spoken = []
+    with patch.object(announcements, "_speak", lambda t: spoken.append(t)):
+        announcements.play_all_pending()
+    assert spoken[0] == announcements.LEAD_IN["hi"]
+    assert spoken[1:] == ["last orders"] * 3
+
+
+def test_repeat_on_clip_normalises_once_and_replays():
+    announcements.enqueue_clip(b"OggS", "audio/ogg", sender="a", repeat=2)
+    normalised, played = [], []
+    with patch.object(announcements, "_speak", lambda t: None), \
+         patch.object(announcements, "_normalize_clip", lambda p: normalised.append(p) or p + ".norm"), \
+         patch.object(announcements, "_ffplay", lambda p, timeout=None: played.append(p)):
+        announcements.play_all_pending()
+    assert len(normalised) == 1
+    assert len(played) == 2 and all(p.endswith(".norm") for p in played)
+
+
+@pytest.mark.parametrize("given, stored", [(0, 1), (-2, 1), (1, 1), (5, 5), (99, 5), ("3", 3), ("junk", 1), (None, 1)])
+def test_repeat_is_clamped_in_the_spool(given, stored):
+    announcements.enqueue_text("x", sender="a", repeat=given)
+    assert announcements._pop_next()["repeat"] == stored
+
+
+def test_default_repeat_is_one():
+    announcements.enqueue_text("x", sender="a")
+    assert announcements._pop_next()["repeat"] == 1
+
+
+def test_text_repeat_via_api(client):
+    res = client.post("/announce", json={"text": "hi", "repeat": 2}, headers=_basic())
+    assert res.status_code == 200 and res.json()["repeat"] == 2
+    assert announcements._pop_next()["repeat"] == 2
+
+
+def test_clip_repeat_via_header(client):
+    res = client.post("/announce", content=b"OggS", headers={**_basic(), "Content-Type": "audio/ogg", "X-Repeat": "3"})
+    assert res.status_code == 200 and res.json()["repeat"] == 3
+    assert announcements._pop_next()["repeat"] == 3
+
+
+@pytest.mark.parametrize("payload, headers, label", [
+    ({"json": {"text": "hi", "repeat": 0}}, {}, "json repeat 0"),
+    ({"json": {"text": "hi", "repeat": 6}}, {}, "json repeat over max"),
+    ({"content": b"OggS"}, {"Content-Type": "audio/ogg", "X-Repeat": "9"}, "header repeat over max"),
+    ({"content": b"OggS"}, {"Content-Type": "audio/ogg", "X-Repeat": "lots"}, "header repeat not a number"),
+])
+def test_api_rejects_out_of_range_repeat(client, payload, headers, label):
+    res = client.post("/announce", headers={**_basic(), **headers}, **payload)
+    assert res.status_code == 422, label
+    assert announcements.pending() is False, label
+
+
 def test_a_failing_announcement_does_not_block_the_next():
     announcements.enqueue_text("bad", sender="a")
     announcements.enqueue_text("good", sender="a")

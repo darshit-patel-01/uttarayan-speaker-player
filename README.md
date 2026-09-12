@@ -208,6 +208,11 @@ message into a PA announcement that cuts into the music:
   announcement language** setting (Hindi or English), which is separate
   from the song-intro language.
 
+To play a message more than once, put `repeat N` in front (max 5):
+`!say repeat 2 Kitchen closes in ten minutes`. For a voice note, type
+`repeat 2` as its caption. One *"Admin announcement"* lead-in, then the
+message N times.
+
 Either way the player pauses the current song, says *"Admin announcement"*,
 plays yours, and resumes the song exactly where it stopped. If nothing is
 playing it plays straight away. Several sent in a row play in order. The
@@ -351,7 +356,7 @@ with the admin credentials — the latter is what the bridges send.
 | `POST` | `/share/config` | Admin | Set the WhatsApp number / Telegram bot by hand |
 | `POST` | `/share/bridge-identity` | Admin | Bridges report the account they're signed in as |
 | `GET` | `/share/qr?target=` | — | SVG QR code for `whatsapp`, `telegram` or `web` |
-| `POST` | `/announce` | Admin | PA announcement: JSON `{"text"}` (TTS) or raw `audio/*` clip; pauses the song, plays, resumes |
+| `POST` | `/announce` | Admin | PA announcement: JSON `{"text", "repeat"}` (TTS) or raw `audio/*` clip with `X-Repeat`; pauses the song, plays, resumes |
 | — | `/playlists…` · `/blacklist…` · `/messages…` | Admin* | Playlists, blacklist and appeals — see `/docs`. *`/messages/appeal` and `/messages/outbox…` are open: they're how blocked users and the bridges reach the admin |
 | `GET` | `/health` | — | Health check |
 
