@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 import analytics
+import announcements
 from config import settings
 import default_playlist
 import messages
@@ -1063,6 +1064,66 @@ def _format_views(count: int) -> str:
     if count >= 1_000:
         return f"{count / 1_000:.1f}K views"
     return f"{count} views" if count else ""
+
+
+# ---------------------------------------------------------------------------
+# Admin announcements — interrupt the music, be heard, resume. See
+# announcements.py for the spool the player drains.
+# ---------------------------------------------------------------------------
+class TextAnnouncementRequest(BaseModel):
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def clean_text(cls, v: str) -> str:
+        v = " ".join((v or "").split())
+        if not v:
+            raise ValueError("text must not be empty")
+        if len(v) > announcements.MAX_TEXT_CHARS:
+            raise ValueError(f"text must be at most {announcements.MAX_TEXT_CHARS} characters")
+        return v
+
+
+@app.post("/announce")
+async def announce(request: Request, admin: str = Depends(require_admin)):
+    """
+    Queues an admin announcement. Two forms, picked by Content-Type:
+
+      application/json  {"text": "..."}   -> spoken via TTS
+      audio/*           <raw clip bytes>  -> played as-is (WhatsApp voice note etc.)
+
+    The player pauses the current song, says "Admin announcement", plays
+    this, then resumes the song where it left off. Between songs it plays
+    immediately. Announcements queue in arrival order.
+    """
+    ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+
+    if ctype == "application/json":
+        try:
+            req = TextAnnouncementRequest(**(await request.json()))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        aid = announcements.enqueue_text(req.text, sender=admin)
+        logger.info("Text announcement %s queued by %s", aid, admin)
+        return {"status": "queued", "id": aid, "kind": "text"}
+
+    if ctype in announcements.ALLOWED_TYPES:
+        length = request.headers.get("content-length")
+        if length and int(length) > announcements.MAX_CLIP_BYTES:
+            raise HTTPException(status_code=413, detail=f"Clip too large (max {announcements.MAX_CLIP_BYTES // (1024*1024)} MB)")
+        data = await request.body()
+        if not data:
+            raise HTTPException(status_code=422, detail="Empty audio body")
+        if len(data) > announcements.MAX_CLIP_BYTES:
+            raise HTTPException(status_code=413, detail=f"Clip too large (max {announcements.MAX_CLIP_BYTES // (1024*1024)} MB)")
+        aid = announcements.enqueue_clip(data, ctype, sender=admin)
+        logger.info("Audio announcement %s (%d bytes, %s) queued by %s", aid, len(data), ctype, admin)
+        return {"status": "queued", "id": aid, "kind": "clip"}
+
+    raise HTTPException(
+        status_code=415,
+        detail="Send application/json {\"text\": ...} or an audio/* body",
+    )
 
 
 @app.get("/search")

@@ -24,5 +24,7 @@ uttarayan.db-shm
 .app.log
 .app.pid
 .volume
+# Spooled admin announcements awaiting playback
+.announcements/
 # Added by code-review-graph
 .code-review-graph/

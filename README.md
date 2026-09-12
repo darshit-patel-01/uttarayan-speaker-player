@@ -327,6 +327,7 @@ with the admin credentials — the latter is what the bridges send.
 | `POST` | `/share/config` | Admin | Set the WhatsApp number / Telegram bot by hand |
 | `POST` | `/share/bridge-identity` | Admin | Bridges report the account they're signed in as |
 | `GET` | `/share/qr?target=` | — | SVG QR code for `whatsapp`, `telegram` or `web` |
+| `POST` | `/announce` | Admin | PA announcement: JSON `{"text"}` (TTS) or raw `audio/*` clip; pauses the song, plays, resumes |
 | — | `/playlists…` · `/blacklist…` · `/messages…` | Admin* | Playlists, blacklist and appeals — see `/docs`. *`/messages/appeal` and `/messages/outbox…` are open: they're how blocked users and the bridges reach the admin |
 | `GET` | `/health` | — | Health check |
 

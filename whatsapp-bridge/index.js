@@ -1,6 +1,7 @@
 import { Boom } from "@hapi/boom";
 import {
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   makeWASocket,
   useMultiFileAuthState,
@@ -312,6 +313,53 @@ function formatReply(data) {
   return lines.join("\n\n") || "Nothing to report.";
 }
 
+// --- Admin announcements -----------------------------------------------------
+// Both hit POST /announce with the bridge's admin credentials. The server
+// spools the announcement; the player pauses the song, plays it, resumes.
+
+function adminAuthHeader() {
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) return null;
+  return `Basic ${Buffer.from(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`).toString("base64")}`;
+}
+
+async function announceClip(sock, msg, audio) {
+  const auth = adminAuthHeader();
+  if (!auth) return { ok: false, error: "ADMIN_USERNAME/ADMIN_PASSWORD not set in bridge .env" };
+  // WhatsApp voice notes are OGG/Opus; audio files keep their own mimetype.
+  const mime = (audio.mimetype || "audio/ogg").split(";")[0].trim();
+  const buf = await downloadMediaMessage(msg, "buffer", {}, { logger: pino({ level: "silent" }), reuploadRequest: sock.updateMediaMessage });
+  const res = await fetch(`${BASE_URL}/announce`, {
+    method: "POST",
+    headers: { "Content-Type": mime, Authorization: auth },
+    body: buf,
+  });
+  if (!res.ok) return { ok: false, error: await describeError(res) };
+  const data = await res.json();
+  return { ok: true, kind: data.kind };
+}
+
+async function announceText(text) {
+  const auth = adminAuthHeader();
+  if (!auth) return { ok: false, error: "ADMIN_USERNAME/ADMIN_PASSWORD not set in bridge .env" };
+  const res = await fetch(`${BASE_URL}/announce`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: auth },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) return { ok: false, error: await describeError(res) };
+  const data = await res.json();
+  return { ok: true, kind: data.kind };
+}
+
+async function describeError(res) {
+  try {
+    const d = await res.json();
+    return typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`;
+  } catch {
+    return `HTTP ${res.status}`;
+  }
+}
+
 // The linked account's own number, e.g. "919173386988:12@s.whatsapp.net" ->
 // "919173386988". Baileys appends a device suffix and the JID domain.
 function ownPhoneNumber(sock) {
@@ -444,6 +492,38 @@ async function start() {
 
       const text =
         msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+
+      // --- Admin announcements: a voice note, or "!say <text>" -------------
+      // Interrupts the current song, plays, then the song resumes.
+      const audio = msg.message.audioMessage;
+      const sayMatch = text.match(/^\s*!(?:say|announce)\s+([\s\S]+)$/i);
+      if (audio || sayMatch) {
+        const number = await senderPhoneNumber(sock, msg);
+        const isAdmin = ADMIN_PHONE_NUMBERS.some((admin) => number.includes(admin));
+        if (!isAdmin) {
+          if (audio) {
+            // Non-admins get a nudge; plain text falls through to the normal flow.
+            await sock.sendMessage(jid, { text: "Voice notes aren't supported — send a song name or YouTube link instead." });
+            await logLine(`ANNOUNCE_DENIED phone=${number} kind=audio`);
+            continue;
+          }
+        } else {
+          try {
+            const res = audio
+              ? await announceClip(sock, msg, audio)
+              : await announceText(sayMatch[1].trim());
+            const reply = res.ok
+              ? `📢 Announcing now${res.kind === "clip" ? " (voice note)" : ""}.`
+              : `❌ Couldn't announce: ${res.error}`;
+            await sock.sendMessage(jid, { text: reply });
+            await logLine(`ANNOUNCE phone=${number} kind=${audio ? "clip" : "text"} ok=${res.ok}${res.error ? ` error="${res.error}"` : ""}`);
+          } catch (err) {
+            await sock.sendMessage(jid, { text: `❌ Couldn't announce: ${err.message}` });
+            await logLine(`ANNOUNCE_ERROR phone=${number} error="${err.message}"`);
+          }
+          continue;
+        }
+      }
 
       // Check if this user has a pending appeal window
       await logLine(`APPEAL_DEBUG jid=${jid} pendingAppeals=[${[...pendingAppeals.keys()].join(",")}] text="${text.slice(0, 50)}"`);

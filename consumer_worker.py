@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 
+import announcements
 from config import settings
 import default_playlist
 from playback import download_audio, is_stopped, kill_active_player, play_youtube_audio
@@ -246,6 +247,12 @@ def main():
             # get_next_queued() returns songs in stored order, which the admin may
             # have changed via drag-and-drop — that is what makes reordering
             # actually affect play order.
+            # An announcement that arrived between songs (or while idle with
+            # no playlist) shouldn't wait for the next track to start.
+            if announcements.pending():
+                announcements.play_all_pending()
+                continue
+
             next_item = queue_state.get_next_queued()
             if next_item is None:
                 if not queue_state.has_pending_songs():
