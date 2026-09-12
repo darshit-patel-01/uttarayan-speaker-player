@@ -196,6 +196,27 @@ no number to type in anywhere. This is an admin call, so it needs
 bridge still works, it just logs a warning and the QR keeps whatever an admin
 entered by hand.
 
+### Admin announcements
+
+From any number in `ADMIN_PHONE_NUMBERS`, the bridge turns two kinds of
+message into a PA announcement that cuts into the music:
+
+- **A voice note** — send one and it's played through the speakers as-is.
+- **`!say <text>`** (or `!announce`) — spoken via TTS in the configured
+  language, e.g. `!say Kitchen closes in ten minutes`.
+
+Either way the player pauses the current song, says *"Admin announcement"*,
+plays yours, and resumes the song exactly where it stopped. If nothing is
+playing it plays straight away. Several sent in a row play in order. The
+bridge replies "📢 Announcing now" so you know it landed. Non-admins who
+send a voice note get a short "not supported" reply.
+
+Voice notes are normalised for loudness so a quiet one still carries, but
+they're compressed mono — fine for announcements, don't expect music
+quality. Max 8 MB / 300 characters. Also reachable directly as
+`POST /announce` (admin) with either a JSON `{"text": …}` body or a raw
+`audio/*` body.
+
 Once `npm install` has been run once, `python run.py` (or `start.bat` on
 Windows) starts the bridge automatically alongside everything else — no need
 to run `npm start` separately after the first setup.
