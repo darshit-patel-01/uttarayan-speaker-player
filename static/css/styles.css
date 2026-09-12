@@ -79,7 +79,8 @@ button.secondary { background: var(--kite-purple); }
   font-weight: 600;
   line-height: 1.4;
   box-shadow: 0 6px 24px rgba(0,0,0,0.18);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   opacity: 0;
   animation: toastIn 0.4s ease forwards;
   display: flex;
@@ -533,18 +534,6 @@ dialog form { flex-direction: column; }
 }
 .kite-decor svg { position: absolute; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15)); }
 
-.dedication-fields {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-.dedication-fields input {
-  flex: 1;
-  padding: 8px 12px;
-  font-size: 0.9rem;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-}
 .enqueue-divider {
   display: flex;
   align-items: center;
@@ -668,8 +657,6 @@ dialog form { flex-direction: column; }
   }
   .tab-btn { padding: 8px 10px; font-size: 0.85rem; white-space: nowrap; flex: none; }
 
-  .dedication-fields { flex-wrap: wrap; }
-  .dedication-fields input { flex: 1 1 100%; }
   form { flex-wrap: wrap; }
   form input[type="text"] { flex: 1 1 100%; }
   form button { flex: 1 1 100%; }

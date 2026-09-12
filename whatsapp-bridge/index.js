@@ -1,6 +1,7 @@
 import { Boom } from "@hapi/boom";
 import {
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   makeWASocket,
   useMultiFileAuthState,
@@ -312,6 +313,65 @@ function formatReply(data) {
   return lines.join("\n\n") || "Nothing to report.";
 }
 
+// --- Admin announcements -----------------------------------------------------
+// Both hit POST /announce with the bridge's admin credentials. The server
+// spools the announcement; the player pauses the song, plays it, resumes.
+
+function adminAuthHeader() {
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) return null;
+  return `Basic ${Buffer.from(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`).toString("base64")}`;
+}
+
+const MAX_REPEAT = 5;
+
+// "repeat 3 kitchen closing" -> { repeat: 3, rest: "kitchen closing" }.
+// Also accepts "x3" / "3x". Anything else -> repeat 1, text untouched.
+// Clamped to 1..MAX_REPEAT so a typo can't loop the PA for minutes.
+function parseRepeat(text) {
+  const m = (text || "").match(/^\s*(?:repeat\s+(\d+)|x(\d+)|(\d+)x)\s*(?:[:\-–—]\s*)?([\s\S]*)$/i);
+  if (!m) return { repeat: 1, rest: (text || "").trim() };
+  const n = parseInt(m[1] || m[2] || m[3], 10);
+  return { repeat: Math.max(1, Math.min(n, MAX_REPEAT)), rest: (m[4] || "").trim() };
+}
+
+async function announceClip(sock, msg, audio, repeat = 1) {
+  const auth = adminAuthHeader();
+  if (!auth) return { ok: false, error: "ADMIN_USERNAME/ADMIN_PASSWORD not set in bridge .env" };
+  // WhatsApp voice notes are OGG/Opus; audio files keep their own mimetype.
+  const mime = (audio.mimetype || "audio/ogg").split(";")[0].trim();
+  const buf = await downloadMediaMessage(msg, "buffer", {}, { logger: pino({ level: "silent" }), reuploadRequest: sock.updateMediaMessage });
+  const res = await fetch(`${BASE_URL}/announce`, {
+    method: "POST",
+    headers: { "Content-Type": mime, Authorization: auth, "X-Repeat": String(repeat) },
+    body: buf,
+  });
+  if (!res.ok) return { ok: false, error: await describeError(res) };
+  const data = await res.json();
+  return { ok: true, kind: data.kind };
+}
+
+async function announceText(text, repeat = 1) {
+  const auth = adminAuthHeader();
+  if (!auth) return { ok: false, error: "ADMIN_USERNAME/ADMIN_PASSWORD not set in bridge .env" };
+  const res = await fetch(`${BASE_URL}/announce`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: auth },
+    body: JSON.stringify({ text, repeat }),
+  });
+  if (!res.ok) return { ok: false, error: await describeError(res) };
+  const data = await res.json();
+  return { ok: true, kind: data.kind };
+}
+
+async function describeError(res) {
+  try {
+    const d = await res.json();
+    return typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`;
+  } catch {
+    return `HTTP ${res.status}`;
+  }
+}
+
 // The linked account's own number, e.g. "919173386988:12@s.whatsapp.net" ->
 // "919173386988". Baileys appends a device suffix and the JID domain.
 function ownPhoneNumber(sock) {
@@ -444,6 +504,46 @@ async function start() {
 
       const text =
         msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+
+      // --- Admin announcements: a voice note, or "!say <text>" -------------
+      // Interrupts the current song, plays, then the song resumes.
+      const audio = msg.message.audioMessage;
+      const sayMatch = text.match(/^\s*!(?:say|announce)\s+([\s\S]+)$/i);
+      if (audio || sayMatch) {
+        const number = await senderPhoneNumber(sock, msg);
+        const isAdmin = ADMIN_PHONE_NUMBERS.some((admin) => number.includes(admin));
+        if (!isAdmin) {
+          if (audio) {
+            // Non-admins get a nudge; plain text falls through to the normal flow.
+            await sock.sendMessage(jid, { text: "Voice notes aren't supported — send a song name or YouTube link instead." });
+            await logLine(`ANNOUNCE_DENIED phone=${number} kind=audio`);
+            continue;
+          }
+        } else {
+          try {
+            // "!say repeat 3 <msg>" / voice-note caption "repeat 3" -> play N times.
+            const body = audio ? (audio.caption || "") : sayMatch[1].trim();
+            const { repeat, rest } = parseRepeat(body);
+            if (!audio && !rest) {
+              await sock.sendMessage(jid, { text: "Usage: !say <message>  or  !say repeat 3 <message>" });
+              continue;
+            }
+            const res = audio
+              ? await announceClip(sock, msg, audio, repeat)
+              : await announceText(rest, repeat);
+            const times = repeat > 1 ? ` ×${repeat}` : "";
+            const reply = res.ok
+              ? `📢 Announcing now${res.kind === "clip" ? " (voice note)" : ""}${times}.`
+              : `❌ Couldn't announce: ${res.error}`;
+            await sock.sendMessage(jid, { text: reply });
+            await logLine(`ANNOUNCE phone=${number} kind=${audio ? "clip" : "text"} repeat=${repeat} ok=${res.ok}${res.error ? ` error="${res.error}"` : ""}`);
+          } catch (err) {
+            await sock.sendMessage(jid, { text: `❌ Couldn't announce: ${err.message}` });
+            await logLine(`ANNOUNCE_ERROR phone=${number} error="${err.message}"`);
+          }
+          continue;
+        }
+      }
 
       // Check if this user has a pending appeal window
       await logLine(`APPEAL_DEBUG jid=${jid} pendingAppeals=[${[...pendingAppeals.keys()].join(",")}] text="${text.slice(0, 50)}"`);

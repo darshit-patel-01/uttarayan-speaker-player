@@ -18,7 +18,7 @@ function renderSettings(settings) {
     'rate_limit_max_songs', 'rate_limit_window_seconds', 'max_queue_wait_seconds',
     'max_duration_seconds', 'duplicate_history_count', 'stuck_timeout_seconds',
     'normalize_volume', 'loudnorm_target_lufs', 'crossfade_lead_seconds',
-    'dedications_enabled', 'tts_language', 'use_public_url',
+    'announcements_enabled', 'tts_language', 'announcement_language', 'dedications_enabled', 'use_public_url',
   ];
   const keys = order.filter(k => k in settings).concat(Object.keys(settings).filter(k => !order.includes(k)));
 

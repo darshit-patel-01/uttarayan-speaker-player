@@ -31,11 +31,23 @@ function showToast(message, type = 'success', duration = 3000) {
   toast.innerHTML =
     `<span class="toast-kites" aria-hidden="true"><span class="tk tk-a">\u{1FA81}</span><span class="tk tk-b">\u{1FA81}</span></span>` +
     `<span style="font-size:1.3rem">${icon}</span><span>${message}</span>`;
+  toast.title = 'Click to dismiss';
   document.body.appendChild(toast);
-  setTimeout(() => {
+
+  let dismissed = false;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    clearTimeout(timer);
     toast.classList.add('out');
-    toast.addEventListener('animationend', () => toast.remove());
-  }, duration);
+    // Child kite/shout animations also fire animationend and bubble up —
+    // only the toast's own exit animation should trigger removal.
+    toast.addEventListener('animationend', (e) => {
+      if (e.target === toast && e.animationName === 'toastOut') toast.remove();
+    });
+  };
+  const timer = setTimeout(dismiss, duration);
+  toast.addEventListener('click', dismiss);
 }
 
 function formatError(data) {
@@ -85,11 +97,14 @@ function askDedication(title) {
   });
 }
 
+// The one enqueue path for every button in the UI. Prompts for a dedication
+// when they're enabled, POSTs, toasts the outcome, and returns the enqueued
+// song (or null) so callers can do their own cleanup on success.
 async function quickEnqueue(song, btn) {
   let dedicationFields = {};
   if (dedicationsEnabled) {
     const answer = await askDedication(song.title || song.url);
-    if (answer === null) return;
+    if (answer === null) return null;
     dedicationFields = answer;
   }
 
@@ -103,21 +118,46 @@ async function quickEnqueue(song, btn) {
     });
     const data = await res.json();
     if (!res.ok) {
-      showToast(formatError(data), 'error');
-    } else if (data.enqueued && data.enqueued.length > 0) {
+      showToast(formatError(data), 'error', 5000);
+      return null;
+    }
+    if (data.enqueued && data.enqueued.length > 0) {
       const s = data.enqueued[0];
-      showToast(`${s.title || 'Song'} queued! Position #${s.position_in_queue}, wait ${s.estimated_wait}`, 'success', 4000);
+      showToast(
+        `${s.title || song.title || 'Song'} queued! Position #${s.position_in_queue}, wait ${s.estimated_wait}`,
+        'success', 4000
+      );
+      _trackEnqueuedSong(s.id);
       loadQueue();
       loadWaitTime();
       loadNowPlaying();
-    } else {
-      const rejection = data.rejected && data.rejected[0];
-      showToast(rejection ? rejection.reason : 'Rejected.', 'error');
+      return s;
     }
+    const rejection = data.rejected && data.rejected[0];
+    showToast(rejection ? rejection.reason : 'Rejected.', 'error', 5000);
+    return null;
   } catch (err) {
-    showToast('Request failed: ' + err.message, 'error');
+    const msg = err instanceof SyntaxError
+      ? 'Could not reach the server — is it running?'
+      : 'Request failed: ' + err.message;
+    showToast(msg, 'error', 5000);
+    return null;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = originalText; }
+  }
+}
+
+// Remember songs enqueued from this browser so now-playing.js can raise a
+// notification when one of them starts.
+function _trackEnqueuedSong(id) {
+  if (!id) return;
+  try {
+    const tracked = JSON.parse(sessionStorage.getItem('_enqueued_song_ids') || '[]');
+    tracked.push(id);
+    sessionStorage.setItem('_enqueued_song_ids', JSON.stringify(tracked));
+  } catch (_) {}
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
   }
 }
 

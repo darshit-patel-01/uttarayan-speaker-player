@@ -164,7 +164,9 @@ every override.
 | Loudness target | −16 LUFS | Target for normalization |
 | Crossfade lead | 8 s | How early the next announcement starts before the current song ends |
 | Song dedications | on | Show the dedication fields and read dedications aloud; when off the UI hides them and any sent are dropped |
-| TTS language | Hindi | Hindi or English announcements |
+| Song announcements | on | Speak a TTS intro before each song; off plays songs back-to-back with no voice (dedications aren't read out either) |
+| TTS language | Hindi | Hindi or English song intros |
+| Admin announcement language | Hindi | Language for the "Admin announcement" lead-in and spoken `!say` messages — independent of the song-intro language |
 | Share public (Tailscale) link | on | Use the Funnel URL in the Web QR whenever the funnel is up |
 
 ## Adding songs via WhatsApp
@@ -194,6 +196,34 @@ no number to type in anywhere. This is an admin call, so it needs
 `ADMIN_USERNAME`/`ADMIN_PASSWORD` in the bridge's `.env`; without them the
 bridge still works, it just logs a warning and the QR keeps whatever an admin
 entered by hand.
+
+### Admin announcements
+
+From any number in `ADMIN_PHONE_NUMBERS`, the bridge turns two kinds of
+message into a PA announcement that cuts into the music:
+
+- **A voice note** — send one and it's played through the speakers as-is.
+- **`!say <text>`** (or `!announce`) — spoken via TTS, e.g.
+  `!say Kitchen closes in ten minutes`. The voice follows the **Admin
+  announcement language** setting (Hindi or English), which is separate
+  from the song-intro language.
+
+To play a message more than once, put `repeat N` in front (max 5):
+`!say repeat 2 Kitchen closes in ten minutes`. For a voice note, type
+`repeat 2` as its caption. One *"Admin announcement"* lead-in, then the
+message N times.
+
+Either way the player pauses the current song, says *"Admin announcement"*,
+plays yours, and resumes the song exactly where it stopped. If nothing is
+playing it plays straight away. Several sent in a row play in order. The
+bridge replies "📢 Announcing now" so you know it landed. Non-admins who
+send a voice note get a short "not supported" reply.
+
+Voice notes are normalised for loudness so a quiet one still carries, but
+they're compressed mono — fine for announcements, don't expect music
+quality. Max 8 MB / 300 characters. Also reachable directly as
+`POST /announce` (admin) with either a JSON `{"text": …}` body or a raw
+`audio/*` body.
 
 Once `npm install` has been run once, `python run.py` (or `start.bat` on
 Windows) starts the bridge automatically alongside everything else — no need
@@ -326,6 +356,7 @@ with the admin credentials — the latter is what the bridges send.
 | `POST` | `/share/config` | Admin | Set the WhatsApp number / Telegram bot by hand |
 | `POST` | `/share/bridge-identity` | Admin | Bridges report the account they're signed in as |
 | `GET` | `/share/qr?target=` | — | SVG QR code for `whatsapp`, `telegram` or `web` |
+| `POST` | `/announce` | Admin | PA announcement: JSON `{"text", "repeat"}` (TTS) or raw `audio/*` clip with `X-Repeat`; pauses the song, plays, resumes |
 | — | `/playlists…` · `/blacklist…` · `/messages…` | Admin* | Playlists, blacklist and appeals — see `/docs`. *`/messages/appeal` and `/messages/outbox…` are open: they're how blocked users and the bridges reach the admin |
 | `GET` | `/health` | — | Health check |
 
@@ -511,7 +542,9 @@ falls back to.
 | `STUCK_TIMEOUT_SECONDS` | `120` | Auto-skip a song whose download + playback hasn't started in time |
 | `PLAYLIST_MODE` | `false` | Reject all guest requests; only the active playlist plays |
 | `DEDICATIONS_ENABLED` | `true` | Let requesters attach a dedication, announced via TTS |
-| `TTS_LANGUAGE` | `hi` | `hi` (Hindi) or `en` (English) announcements |
+| `ANNOUNCEMENTS_ENABLED` | `true` | Speak a TTS announcement before each song |
+| `TTS_LANGUAGE` | `hi` | `hi` (Hindi) or `en` (English) song intros |
+| `ANNOUNCEMENT_LANGUAGE` | `hi` | Language for admin announcements (`hi` / `en`) |
 | `NORMALIZE_VOLUME` | `true` | Apply mpv's `loudnorm` filter to every song |
 | `LOUDNORM_TARGET_LUFS` | `-16` | Target loudness (LUFS) for normalization |
 | `CROSSFADE_LEAD_SECONDS` | `8` | How early into a song's tail the next announcement starts |

@@ -75,61 +75,10 @@ function renderSearchResults(results) {
 }
 
 async function enqueueFromSearch(song, btn) {
-  btn.disabled = true;
-  btn.textContent = 'Adding...';
-
-  const dedicationName = document.getElementById('dedication-name').value.trim() || undefined;
-  const dedication = document.getElementById('dedication').value.trim() || undefined;
-
-  try {
-    const res = await fetch('/enqueue', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-      body: JSON.stringify({
-        urls: [song.url],
-        dedication,
-        dedication_name: dedicationName,
-      }),
-    });
-    const data = await res.json();
-
-    if (!res.ok) {
-      btn.textContent = 'Failed';
-      setTimeout(() => { btn.textContent = 'Enqueue'; btn.disabled = false; }, 2000);
-      return;
-    }
-
-    if (data.enqueued && data.enqueued.length > 0) {
-      const s = data.enqueued[0];
-      btn.textContent = `#${s.position_in_queue}`;
-      btn.style.background = '#2e7d32';
-
-      document.getElementById('dedication-name').value = '';
-      document.getElementById('dedication').value = '';
-      document.getElementById('search-query').value = '';
-      searchResults.innerHTML = '';
-
-      if (s.id) {
-        try {
-          const tracked = JSON.parse(sessionStorage.getItem('_enqueued_song_ids') || '[]');
-          tracked.push(s.id);
-          sessionStorage.setItem('_enqueued_song_ids', JSON.stringify(tracked));
-        } catch (_) {}
-        if ('Notification' in window && Notification.permission === 'default') {
-          Notification.requestPermission();
-        }
-      }
-
-      loadQueue();
-      loadWaitTime();
-      loadNowPlaying();
-    } else if (data.rejected && data.rejected.length > 0) {
-      btn.textContent = 'Rejected';
-      btn.title = data.rejected[0].reason;
-      setTimeout(() => { btn.textContent = 'Enqueue'; btn.title = ''; btn.disabled = false; }, 3000);
-    }
-  } catch (err) {
-    btn.textContent = 'Error';
-    setTimeout(() => { btn.textContent = 'Enqueue'; btn.disabled = false; }, 2000);
+  // Shared path: dedication dialog (when enabled), POST, toast, tracking.
+  const s = await quickEnqueue(song, btn);
+  if (s) {
+    document.getElementById('search-query').value = '';
+    searchResults.innerHTML = '';
   }
 }

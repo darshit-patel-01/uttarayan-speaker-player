@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 
+import announcements
 from config import settings
 import default_playlist
 from playback import download_audio, is_stopped, kill_active_player, play_youtube_audio
@@ -75,9 +76,17 @@ logger = logging.getLogger("consumer_worker")
 # rate="+25%" and pitch="+8Hz" give it an upbeat, energetic feel.
 # ---------------------------------------------------------------------------
 def _tts_announce(title: str, dedication: str = None, dedication_name: str = None, from_playlist: bool = False) -> None:
+    import runtime_config
+
+    # Every announcement path (pre-play, playlist, crossfade thread) lands
+    # here, so this one check is the whole on/off switch. Read per call so an
+    # admin toggle applies to the next song with no restart.
+    if not runtime_config.get("announcements_enabled"):
+        logger.info("Announcements are off — skipping TTS for: %s", title)
+        return
+
     import asyncio
     import edge_tts
-    import runtime_config
 
     async def _generate(path: str) -> None:
         lang = runtime_config.get("tts_language") or "hi"
@@ -202,6 +211,7 @@ def _play_default_song():
             on_pause=default_playlist.mark_now_playing_paused,
             on_resume=default_playlist.mark_now_playing_resumed,
             on_seek=default_playlist.mark_now_playing_seeked,
+            on_playback_start=default_playlist.mark_now_playing_started,
         )
         if finished:
             logger.info("Finished default playlist song: %s", song["url"])
@@ -237,6 +247,12 @@ def main():
             # get_next_queued() returns songs in stored order, which the admin may
             # have changed via drag-and-drop — that is what makes reordering
             # actually affect play order.
+            # An announcement that arrived between songs (or while idle with
+            # no playlist) shouldn't wait for the next track to start.
+            if announcements.pending():
+                announcements.play_all_pending()
+                continue
+
             next_item = queue_state.get_next_queued()
             if next_item is None:
                 if not queue_state.has_pending_songs():

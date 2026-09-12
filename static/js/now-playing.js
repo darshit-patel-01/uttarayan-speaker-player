@@ -1,6 +1,6 @@
 // --- Now playing / up next (public, always visible) ----------------------
 
-let npState = { elapsed: 0, duration: 0, isPaused: false, isStopped: false, hasPlaying: false };
+let npState = { elapsed: 0, duration: 0, isPaused: false, isStopped: false, hasPlaying: false, isAnnouncing: false };
 let seekBarDragging = false;
 let _lastNotifiedSongId = null;
 
@@ -35,7 +35,14 @@ function renderNowPlayingRow(containerId, song, emptyText, showIndicator) {
   const titleRow = document.createElement('div');
   titleRow.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
 
-  if (showIndicator && song.status !== 'downloading') {
+  if (showIndicator && song.status === 'announcing') {
+    const label = document.createElement('span');
+    label.textContent = '\u{1F4E2} Announcing…';
+    label.style.cssText = 'font-size:0.72rem; color:#7b1fa2; white-space:nowrap; font-weight:600;';
+    titleRow.appendChild(label);
+  }
+
+  if (showIndicator && song.status !== 'downloading' && song.status !== 'announcing') {
     const indicator = document.createElement('span');
     indicator.className = 'np-playing-indicator';
     indicator.setAttribute('aria-hidden', 'true');
@@ -113,7 +120,7 @@ function _removeTrackedSongId(id) {
 
 function _checkSongNotification(data) {
   if (!data.playing || !data.playing.id) return;
-  if (data.playing.status === 'downloading') return;
+  if (data.playing.status === 'downloading' || data.playing.status === 'announcing') return;
   const playingId = data.playing.id;
   if (playingId === _lastNotifiedSongId) return;
   const tracked = _getTrackedSongIds();
@@ -169,11 +176,13 @@ function applyNowPlayingData(data) {
     npState.elapsed = data.playing.elapsed_seconds ?? 0;
     npState.duration = data.playing.duration_seconds ?? 0;
     npState.isPaused = data.playing.is_paused ?? false;
+    npState.isAnnouncing = data.playing.status === 'announcing' || data.playing.status === 'downloading';
   } else {
     npState.hasPlaying = false;
     npState.elapsed = 0;
     npState.duration = 0;
     npState.isPaused = false;
+    npState.isAnnouncing = false;
   }
   updateAdminProgressUI();
 
@@ -230,7 +239,8 @@ function connectNowPlayingSocket() {
 connectNowPlayingSocket();
 
 setInterval(() => {
-  if (!npState.hasPlaying || npState.isPaused || npState.isStopped || seekBarDragging) return;
+  // No audio yet during announce/download — hold the clock at 0:00.
+  if (!npState.hasPlaying || npState.isPaused || npState.isStopped || npState.isAnnouncing || seekBarDragging) return;
   if (!sessionStorage.getItem(AUTH_STORAGE_KEY)) return;
   npState.elapsed = Math.min(npState.elapsed + 1, npState.duration || Infinity);
   updateAdminProgressUI();

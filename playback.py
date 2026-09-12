@@ -11,6 +11,7 @@ import time
 
 import yt_dlp
 
+import announcements
 import runtime_config
 from config import settings
 
@@ -359,6 +360,24 @@ def play_youtube_audio(
                     if on_seek:
                         on_seek(seek_target)
                     logger.info("Seeked to %.1fs for %s", seek_target, youtube_url)
+                    continue
+
+                # --- Admin announcement: pause, play it, resume ------------
+                if announcements.pending():
+                    was_paused = _paused
+                    if not was_paused:
+                        _mpv_cmd(mpv_pipe, ["set_property", "pause", True])
+                        if on_pause:
+                            on_pause()
+                    logger.info("Admin announcement — pausing %s", youtube_url)
+                    try:
+                        announcements.play_all_pending()
+                    finally:
+                        if not was_paused and not os.path.exists(settings.pause_signal_file):
+                            _mpv_cmd(mpv_pipe, ["set_property", "pause", False])
+                            if on_resume:
+                                on_resume()
+                            logger.info("Announcement done — resumed %s", youtube_url)
                     continue
 
                 # --- Volume (instant via IPC, no restart) ------------------
